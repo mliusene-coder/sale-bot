@@ -615,8 +615,8 @@ async def cb_confirm(c: CallbackQuery, state: FSMContext):
 
     exp = get_reservation(res_id)["expires_at"]
     await c.message.answer(
-        f"✅ Бронь создана (на 24 часа, до {exp}).\n\n"
-        "Теперь пришли адрес (текстом одним сообщением)."
+       f"✅ Бронь создана (на 24 часа, до {expires_at.strftime('%Y-%m-%d %H:%M')})."
+        "Адрес самовывоза: BW Sole. Bulevar Vudroa Vilsona, 17. Как подъедете, напишите @liusene" (текстом одним сообщением)."
     )
 
 @dp.message(AddressFlow.waiting_address)
