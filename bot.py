@@ -409,7 +409,6 @@ else:
         text=post_text,
         reply_markup=kb
     )
-        )
         await m.answer("✅ Отправлено в канал.")
     except Exception as e:
         await m.answer(f"❌ Не смог отправить в канал.\nПроверь что бот админ в канале.\nОшибка: {e}")
