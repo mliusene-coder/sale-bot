@@ -641,3 +641,15 @@ async def address_flow(m: Message, state: FSMContext):
         f"Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n\n"
         f"Как подъедете, напишите в тг @liusene"
     )
+async def main():
+    print("=== BEFORE POLLING ===", flush=True)
+    try:
+        await dp.start_polling(bot)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
