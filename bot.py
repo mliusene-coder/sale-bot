@@ -1,4 +1,4 @@
-AddressFlow.waiting_address import os
+import os
 import re
 import sqlite3
 import asyncio
