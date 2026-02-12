@@ -372,34 +372,43 @@ def parse_title_price(txt: str) -> Tuple[Optional[str], str]:
         return (t or None), (p or "")
     return (txt.strip() or None), ""
 
-
 async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id: Optional[str]):
-    me = await bot.get_me()
-    bot_username = me.username or ""
-    post_text = f"🛍 {title}"
-    if price:
-        post_text += f"\n💰 {price}"
-    post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
+    print("=== POST TO CHANNEL: START ===", flush=True)
+    print("CHANNEL_USERNAME =", CHANNEL_USERNAME, flush=True)
+    print("item_id =", item_id, "has_photo =", bool(photo_id), flush=True)
 
-    kb = kb_item(item_id, bot_username)
+    try:
+        me = await bot.get_me()
+        bot_username = me.username or ""
 
-    if not CHANNEL_USERNAME:
-        raise RuntimeError("CHANNEL_USERNAME is empty")
+        post_text = f"🛍 {title}"
+        if price:
+            post_text += f"\n💰 {price}"
+        post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
 
-    if photo_id:
-        await bot.send_photo(
-            chat_id=CHANNEL_USERNAME,
-            photo=photo_id,
-            caption=post_text,
-            reply_markup=kb
-        )
-    else:
-        await bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text=post_text,
-            reply_markup=kb
-        )
+        kb = kb_item(item_id, bot_username)
 
+        if photo_id:
+            await bot.send_photo(
+                chat_id=CHANNEL_USERNAME,
+                photo=photo_id,
+                caption=post_text,
+                reply_markup=kb
+            )
+        else:
+            await bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=post_text,
+                reply_markup=kb
+            )
+
+        print("=== POST TO CHANNEL: OK ===", flush=True)
+
+    except Exception as e:
+        import traceback
+        print("=== POST TO CHANNEL: FAIL ===", flush=True)
+        traceback.print_exc()
+        raise
 
 # =========================
 # Commands
