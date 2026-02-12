@@ -13,6 +13,10 @@ import os
 import re
 import sqlite3
 import asyncio
+def db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 from datetime import datetime, timedelta, date, time
 from zoneinfo import ZoneInfo
 from typing import Optional, List, Tuple
@@ -642,13 +646,9 @@ async def address_flow(m: Message, state: FSMContext):
         f"Как подъедете, напишите в тг @liusene"
     )
 async def main():
-   async def main():
     init_db()
+    print("=== DB INIT DONE ===", flush=True)
     await dp.start_polling(bot)
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        raise
 
 if __name__ == "__main__":
     import asyncio
