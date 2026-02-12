@@ -1,3 +1,14 @@
+import sys
+import traceback
+
+print("=== BOOT: bot.py started ===", flush=True)
+
+def _excepthook(exc_type, exc, tb):
+    traceback.print_exception(exc_type, exc, tb)
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+sys.excepthook = _excepthook
 import os
 import re
 import sqlite3
@@ -631,4 +642,6 @@ async def address_flow(m: Message, state: FSMContext):
         f"Как подъедете, напишите в тг @liusene"
     )
 
-    await state.clear()
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
