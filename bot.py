@@ -549,7 +549,10 @@ async def cb_checkout_start(c: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await c.message.answer("Выбери день (следующие 5 дней):", reply_markup=kb_days())
+    await c.message.answer(
+    "Самовывоз из Belgrade Waterfront\n\nВыбери день (следующие 5 дней):",
+    reply_markup=kb_days()
+)
 
 
 @dp.callback_query(F.data.startswith("pick_day:"))
@@ -637,11 +640,17 @@ async def address_flow(m: Message, state: FSMContext):
         except Exception:
             pass
 
-    await m.answer(
-        "✅ Готово! Бронь подтверждена.\n\n"
-        f"📅 {r['day']}\n🕒 {r['slot']}\n🏠 {addr}\n\n"
-        f"{SUPPORT_TEXT}"
-    )
+    exp_dt = parse_iso(r["expires_at"]).astimezone(TZ)
+exp_str = exp_dt.strftime("%d.%m.%Y %H:%M")
+
+await m.answer(
+    "✅ Готово! Бронь подтверждена.\n\n"
+    f"📅 {r['day']}\n🕒 {r['slot']}\n"
+    f"⏳ Бронь до: {exp_str}\n"
+    "📍 Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n"
+    "Как подъедете, напишите в тг @liusene\n\n"
+    f"{SUPPORT_TEXT}"
+)
 
     await state.clear()
 
