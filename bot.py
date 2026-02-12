@@ -641,7 +641,3 @@ async def address_flow(m: Message, state: FSMContext):
         f"Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n\n"
         f"Как подъедете, напишите в тг @liusene"
     )
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
