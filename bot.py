@@ -488,8 +488,6 @@ async def add_text_steps(m: Message):
 # callbacks
 # =========================
 @dp.callback_query(F.data.startswith("add:"))
-async def cb_add(cb: CallbackQuery):
-    ...
 
 async def cb_add(cb: CallbackQuery):
     item_id = int(cb.data.split(":")[1])
@@ -576,7 +574,9 @@ async def cb_pick_time(cb: CallbackQuery):
         await cb.answer()
         return
     await cb.answer()
-    _, _, day_str, time_str = cb.data.split(":")
+   parts = cb.data.split(":")
+day_str = parts[2]
+time_str = ":".join(parts[3:])   # соберёт "09:00"
     items = get_cart_items(cb.from_user.id)
     if not items:
         await cb.message.edit_text(f"🧺 Корзина пустая.\n\nℹ️ {SUPPORT_TEXT}")
@@ -599,7 +599,9 @@ async def cb_book_confirm(cb: CallbackQuery):
         await cb.answer()
         return
     await cb.answer()
-    _, _, day_str, time_str = cb.data.split(":")
+     parts = cb.data.split(":")
+day_str = parts[2]
+time_str = ":".join(parts[3:])   
     pickup_dt = datetime.strptime(f"{day_str} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
 
     ok, expires_iso, item_ids = reserve_cart(cb.from_user.id, pickup_dt)
