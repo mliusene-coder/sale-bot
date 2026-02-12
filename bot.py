@@ -615,7 +615,7 @@ async def cb_confirm(c: CallbackQuery, state: FSMContext):
 
     exp = get_reservation(res_id)["expires_at"]
     await c.message.answer(
-     f"✅ Бронь создана (на 24 часа, до {until_str}).\n\n"
+     f"✅ Бронь создана (на 24 часа, до {expires_at}).\n\n"
     f"📍 Самовывоз: {PICKUP_LABEL}\n"
     f"Адрес: {PICKUP_ADDRESS}\n"
     f"Как подъедете — напишите: {ARRIVAL_CONTACT}\n\n"
