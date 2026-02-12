@@ -373,7 +373,7 @@ async def catch_add_flow(m: Message):
     else:
         title, price = txt.strip(), ""
 
-    if not title:
+if not title:
     await m.answer("Название пустое. Пришли ещё раз.")
     return
 
@@ -385,7 +385,7 @@ dp["awaiting_add"] = s
 
     await m.answer(f"✅ Товар добавлен: #{item_id}\nТеперь отправляю в канал…")
 
-    if not CHANNEL_USERNAME:
+if not CHANNEL_USERNAME:
         await m.answer("⚠️ ENV CHANNEL_USERNAME пустой. Я не могу отправить в канал.")
         return
 
