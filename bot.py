@@ -39,7 +39,6 @@ SUPPORT_TEXT = f"Если бот не отвечает или лагает — �
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-dp.callback_query.register(cb_add, F.data.startswith("add:"))
 
 
 
@@ -489,6 +488,9 @@ async def add_text_steps(m: Message):
 # callbacks
 # =========================
 @dp.callback_query(F.data.startswith("add:"))
+async def cb_add(cb: CallbackQuery):
+    ...
+
 async def cb_add(cb: CallbackQuery):
     item_id = int(cb.data.split(":")[1])
     user_id = cb.from_user.id
