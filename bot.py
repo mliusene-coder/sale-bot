@@ -324,12 +324,12 @@ async def cmd_add(m: Message):
         return
 
     await m.answer(
-        "Ок. Пришли одним сообщением:\n"
-        "<название> | <цена>\n\n"
-        "Пример:\n"
-        "Футболка белая | 2500 RSD\n\n"
-        "Чтобы отменить: /cancel"
-    )
+    "Ок. Пришли ОДНИМ сообщением фото + подпись в формате:\n"
+    "<название> | <цена>\n\n"
+    "Пример:\n"
+    "Футболка белая | 2500 RSD\n\n"
+    "Чтобы отменить: /cancel"
+)
     # ставим простой флаг в памяти (по user_id)
     dp["awaiting_add"] = dp.get("awaiting_add", set())
     dp["awaiting_add"].add(m.from_user.id)
@@ -343,15 +343,27 @@ async def cmd_cancel(m: Message):
         await m.answer("Ок, отменено.")
     else:
         await m.answer("Нечего отменять.")
+        
 
+def parse_item_line(line: str):
+    if not line:
+        return None, None
+    if "|" not in line:
+        return None, None
+    name, price = [x.strip() for x in line.split("|", 1)]
+    if not name or not price:
+        return None, None
+    return name, price
 
 @dp.message()
 async def catch_add_flow(m: Message):
     s = dp.get("awaiting_add", set())
+    if not m.from_user:
+        return
     if m.from_user.id not in s:
         return
 
-    txt = (m.text or "").strip()
+    txt = (m.caption or m.text or "").strip()
     if not txt:
         await m.answer("Пусто. Пришли текст как в примере.")
         return
@@ -362,11 +374,14 @@ async def catch_add_flow(m: Message):
         title, price = txt.strip(), ""
 
     if not title:
-        await m.answer("Название пустое. Пришли ещё раз.")
-        return
+    await m.answer("Название пустое. Пришли ещё раз.")
+    return
 
-    item_id = add_item(title=title, price=price)
-    s.discard(m.from_user.id)
+photo_id = m.photo[-1].file_id if m.photo else None
+
+item_id = add_item(title=title, price=price)
+s.discard(m.from_user.id)
+dp["awaiting_add"] = s
 
     await m.answer(f"✅ Товар добавлен: #{item_id}\nТеперь отправляю в канал…")
 
@@ -378,13 +393,22 @@ async def catch_add_flow(m: Message):
     if price:
         channel_text += f"\n💰 {price}"
     channel_text += f"\n\nℹ️ {SUPPORT_TEXT}"
+post_text = channel_text
 
     try:
-        await bot.send_message(
-            chat_id=f"@{CHANNEL_USERNAME}",
-            text=channel_text,
-            reply_markup=kb_channel_item(item_id),
-            disable_web_page_preview=True,
+       if photo_id:
+    await bot.send_photo(
+        chat_id=CHANNEL_USERNAME,
+        photo=photo_id,
+        caption=post_text,
+        reply_markup=kb
+    )
+else:
+    await bot.send_message(
+        chat_id=CHANNEL_USERNAME,
+        text=post_text,
+        reply_markup=kb
+    )
         )
         await m.answer("✅ Отправлено в канал.")
     except Exception as e:
