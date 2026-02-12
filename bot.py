@@ -39,6 +39,11 @@ SUPPORT_TEXT = f"Если бот не отвечает или лагает — �
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+@dp.callback_query()
+async def debug_all(cb):
+    await cb.answer()
+    print("CLICK:", cb.data)
+
 
 
 # =========================
