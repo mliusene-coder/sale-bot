@@ -618,17 +618,17 @@ async def cb_confirm(c: CallbackQuery, state: FSMContext):
 
     item_ids = [int(it["id"]) for it in items]
     res_id = create_reservation(c.from_user.id, day_str, slot_str, item_ids)
+    r = get_reservation(res_id)
+    expires_at = r["expires_at"]
 
-    await state.set_state(AddressFlow.waiting_address)
-    await state.update_data(res_id=res_id)
-
-    exp = get_reservation(res_id)["expires_at"]
     await c.message.answer(
-     f"✅ Бронь создана (на 24 часа, до {expires_at}).\n\n"
-    f"📍 Самовывоз: {PICKUP_LABEL}\n"
-    f"Адрес: {PICKUP_ADDRESS}\n"
-    f"Как подъедете — напишите: {ARRIVAL_CONTACT}\n\n"
-    f"Теперь пришли адрес (текстом одним сообщением)."
+        "✅ Бронь подтверждена.\n\n"
+        f"📅 {day_str}\n"
+        f"🕒 {slot_str}\n"
+        f"⏳ Бронь до: {exp_str}\n\n"
+        "📍 Самовывоз из Belgrade Waterfront\n"
+        "Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n"
+        "Как подъедете, напишите в тг @liusene"
 )
     
 @dp.message(AddressFlow.waiting_address)
