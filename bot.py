@@ -643,7 +643,7 @@ async def address_flow(m: Message, state: FSMContext):
     exp_dt = parse_iso(r["expires_at"]).astimezone(TZ)
 exp_str = exp_dt.strftime("%d.%m.%Y %H:%M")
 
-await m.answer(
+    await m.answer(
     "✅ Готово! Бронь подтверждена.\n\n"
     f"📅 {r['day']}\n🕒 {r['slot']}\n"
     f"⏳ Бронь до: {exp_str}\n"
