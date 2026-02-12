@@ -642,9 +642,9 @@ async def address_flow(m: Message, state: FSMContext):
         f"Как подъедете, напишите в тг @liusene"
     )
 async def main():
-    print("=== BEFORE POLLING ===", flush=True)
-    try:
-        await dp.start_polling(bot)
+   async def main():
+    init_db()
+    await dp.start_polling(bot)
     except Exception:
         import traceback
         traceback.print_exc()
