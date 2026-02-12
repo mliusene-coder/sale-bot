@@ -383,7 +383,7 @@ item_id = add_item(title=title, price=price)
 s.discard(m.from_user.id)
 dp["awaiting_add"] = s
 
-    await m.answer(f"✅ Товар добавлен: #{item_id}\nТеперь отправляю в канал…")
+await m.answer(f"✅ Товар добавлен: #{item_id}\nТеперь отправляю в канал…")
 
 if not CHANNEL_USERNAME:
         await m.answer("⚠️ ENV CHANNEL_USERNAME пустой. Я не могу отправить в канал.")
