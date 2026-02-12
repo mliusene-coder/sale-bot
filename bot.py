@@ -390,7 +390,7 @@ if not CHANNEL_USERNAME:
         return
 
 channel_text = f"🛍 {title}"
-    if price:
+if price:
         channel_text += f"\n💰 {price}"
     channel_text += f"\n\nℹ️ {SUPPORT_TEXT}"
 post_text = channel_text
