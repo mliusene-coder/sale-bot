@@ -1,4 +1,4 @@
-import os
+AddressFlow.waiting_address import os
 import re
 import sqlite3
 import asyncio
@@ -563,9 +563,12 @@ async def cb_pick_day(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("pick_slot:"))
-async def cb_pick_slot(c: CallbackQuery):
+async def cb_pick_slot(c: CallbackQuery, state: FSMContext):
     await c.answer()
     _, day_str, slot_str = c.data.split(":", 2)
+
+    await state.update_data(day=day_str, time=slot_str)
+
     await c.message.answer(
         f"Подтверди бронь:\n📅 {day_str}\n🕒 {slot_str}\n\n"
         "Бронь держится 24 часа после подтверждения.",
@@ -601,67 +604,31 @@ async def cb_confirm(c: CallbackQuery, state: FSMContext):
         "Теперь пришли адрес (текстом одним сообщением)."
     )
 
-
 @dp.message(AddressFlow.waiting_address)
 async def address_flow(m: Message, state: FSMContext):
+    address = (m.text or "").strip()
+
+    if not address:
+        await m.answer("Пришли адрес текстом одним сообщением.")
+        return
+
     data = await state.get_data()
-    res_id = data.get("res_id")
-    if not res_id:
-        await state.clear()
-        await m.answer("Что-то пошло не так. Попробуй снова /cart")
-        return
+    day = data.get("day")
+    time_str = data.get("time")
 
-    addr = (m.text or "").strip()
-    if len(addr) < 5:
-        await m.answer("Пожалуйста, пришли адрес текстом (минимум несколько слов).")
-        return
+    tz = ZoneInfo("Europe/Belgrade")
+    until = datetime.now(tz) + timedelta(hours=24)
 
-    set_reservation_address(int(res_id), addr)
-    r = get_reservation(int(res_id))
-    items = reservation_items(int(res_id))
-
-    cart_clear(m.from_user.id)
-
-    items_txt = "\n".join(
-        [f"• #{it['id']} — {it['title']} {('— ' + (it['price'] or '')) if it['price'] else ''}" for it in items]
-    )
-    admin_msg = (
-        "📩 Новая бронь!\n"
-        f"User: {m.from_user.id}\n"
-        f"📅 {r['day']}\n"
-        f"🕒 {r['slot']}\n"
-        f"🏠 Адрес: {addr}\n"
-        f"⏳ До: {r['expires_at']}\n\n"
-        f"{items_txt}"
-    )
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(chat_id=admin_id, text=admin_msg)
-        except Exception:
-            pass
-
-    exp_dt = parse_iso(r["expires_at"]).astimezone(TZ)
-exp_str = exp_dt.strftime("%d.%m.%Y %H:%M")
+    until_str = until.strftime("%d.%m.%Y %H:%M")
 
     await m.answer(
-    "✅ Готово! Бронь подтверждена.\n\n"
-    f"📅 {r['day']}\n🕒 {r['slot']}\n"
-    f"⏳ Бронь до: {exp_str}\n"
-    "📍 Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n"
-    "Как подъедете, напишите в тг @liusene\n\n"
-    f"{SUPPORT_TEXT}"
-)
+        f"✅ Бронь создана\n\n"
+        f"📅 {day}\n"
+        f"⏰ {time_str}\n\n"
+        f"Бронь до: {until_str}\n\n"
+        f"📍 Самовывоз из Belgrade Waterfront\n"
+        f"Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n\n"
+        f"Как подъедете, напишите в тг @liusene"
+    )
 
-await state.clear()
-
-# =========================
-# Run
-# =========================
-async def main():
-    init_db()
-    asyncio.create_task(background_cleanup())
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await state.clear()
