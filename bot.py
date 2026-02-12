@@ -483,9 +483,9 @@ async def add_item_flow(m: Message, state: FSMContext):
         await publish_item_to_channel(item_id, title, price, photo_id)
         await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
     except Exception as e:
-    import traceback
-    traceback.print_exc()
-    await m.answer(f"❌ Не смог отправить в канал. Ошибка: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        await m.answer(f"❌ Не смог отправить в канал. Ошибка: {type(e).__name__}: {e}")
 
 
 # =========================
