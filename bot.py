@@ -652,7 +652,7 @@ await m.answer(
     f"{SUPPORT_TEXT}"
 )
 
-    await state.clear()
+await state.clear()
 
 # =========================
 # Run
