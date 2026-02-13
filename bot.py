@@ -40,6 +40,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # ENV
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+WAIT_PHOTO_ID = set()
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
 
@@ -494,11 +495,31 @@ async def cmd_start(m: Message):
         f"{SUPPORT_TEXT}"
     )
 
+@dp.message(Command("photoid"))
+async def cmd_photoid(m: Message):
+    if m.from_user.id not in ADMIN_IDS:
+        await m.answer("⛔️ Только для админов.")
+        return
+
+    WAIT_PHOTO_ID.add(m.from_user.id)
+    await m.answer("Ок. Пришли ОДНО фото (как фото, не документом). Я пришлю photo_id.")
 
 @dp.message(Command("cart"))
 async def cmd_cart(m: Message):
     await show_cart(m.from_user.id, m)
 
+@dp.message(F.photo)
+async def on_photo_get_id(m: Message):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+
+    if m.from_user.id not in WAIT_PHOTO_ID:
+        return
+
+    WAIT_PHOTO_ID.discard(m.from_user.id)
+
+    photo_id = m.photo[-1].file_id  # самое качественное фото
+    await m.answer(f"photo_id:\n{photo_id}\n\nСкопируй и вставь в колонку photo в CSV.")
 
 @dp.message(Command("add"))
 async def cmd_add(m: Message, state: FSMContext):
