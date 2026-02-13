@@ -38,7 +38,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # ENV
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
+ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 print("=== ADMIN_CHAT_ID ===", repr(ADMIN_CHAT_ID), flush=True)
 
