@@ -450,68 +450,42 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
         post_text = f"🛍 {title}"
         if price:
             post_text += f"\n💰 {price}"
-            post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
+        post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
 
         kb = kb_item(item_id, bot_username)
 
+        # ---- MULTI PHOTO BLOCK ----
         photos = get_item_photos(item_id)
 
-        # если в новой таблице пусто — используем старое поле как fallback
         if not photos and photo_id:
             photos = [photo_id]
 
         if photos:
             media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
-        await bot.send_media_group(
-            chat_id=CHANNEL_USERNAME,
-            media=media
-        )
+            await bot.send_media_group(
+                chat_id=CHANNEL_USERNAME,
+                media=media
+            )
 
-        # отдельным сообщением — текст + кнопка
-        await bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text=post_text,
-            reply_markup=kb
-        )
-    else:
-        await bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text=post_text,
-            reply_markup=kb
-        )
+            await bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=post_text,
+                reply_markup=kb
+            )
+        else:
+            await bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=post_text,
+                reply_markup=kb
+            )
 
-    print("=== POST TO CHANNEL: OK ===", flush=True)
+        print("=== POST TO CHANNEL: OK ===", flush=True)
 
     except Exception as e:
         import traceback
         print("=== POST TO CHANNEL: FAIL ===", flush=True)
         traceback.print_exc()
         raise
-        
-async def notify_admin_reservation(res_id, user_id, day_str, slot_str, exp_str, items):
-    print("ADMIN notify: called", flush=True)
-    print("ADMIN notify: ADMIN_CHAT_ID =", repr(ADMIN_CHAT_ID), flush=True)
-
-    if not ADMIN_CHAT_ID:
-        print("ADMIN notify skipped — no ADMIN_CHAT_ID", flush=True)
-        return
-
-    text = (
-        "🧾 НОВАЯ БРОНЬ\n"
-        f"id: {res_id}\n"
-        f"user: {user_id}\n"
-        f"дата: {day_str}\n"
-        f"время: {slot_str}\n"
-        f"до: {exp_str}"
-    )
-
-    try:
-        await bot.send_message(int(ADMIN_CHAT_ID), text)
-        print("ADMIN notify sent", flush=True)
-    except Exception:
-        import traceback
-        print("ADMIN notify FAILED", flush=True)
-        traceback.print_exc()
 
 # =========================
 # Commands
