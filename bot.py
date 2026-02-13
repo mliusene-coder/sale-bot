@@ -450,7 +450,7 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
         post_text = f"🛍 {title}"
         if price:
             post_text += f"\n💰 {price}"
-        post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
+            post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
 
         kb = kb_item(item_id, bot_username)
 
@@ -461,7 +461,7 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
             photos = [photo_id]
 
         if photos:
-        media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
+            media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
         await bot.send_media_group(
             chat_id=CHANNEL_USERNAME,
             media=media
