@@ -42,6 +42,7 @@ ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "").strip()  # e.g. "@bestgaragesale"
 SUPPORT_TEXT = os.getenv("SUPPORT_TEXT", "Если бот лагает — @liusene").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Belgrade").strip()
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is empty")
@@ -220,7 +221,8 @@ def cart_list(user_id: int) -> List[sqlite3.Row]:
 def create_reservation(user_id: int, day_str: str, slot_str: str, item_ids: List[int]) -> int:
     cleanup_expired()
     created = now_local()
-    expires = created + timedelta(hours=24)
+    slot_dt = datetime.fromisoformat(f"{day_str}T{slot_str}:00").replace(tzinfo=TZ)
+    expires = max(created + timedelta(hours=24), slot_dt)
     with db() as conn:
         cur = conn.execute(
             """
@@ -409,6 +411,26 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
         print("=== POST TO CHANNEL: FAIL ===", flush=True)
         traceback.print_exc()
         raise
+        
+async def notify_admin_reservation(res_id, user_id, day_str, slot_str, exp_str, items):
+    if not ADMIN_CHAT_ID:
+        print("ADMIN notify skipped — no ADMIN_CHAT_ID", flush=True)
+        return
+
+    text = (
+        "🧾 НОВАЯ БРОНЬ\n"
+        f"id: {res_id}\n"
+        f"user: {user_id}\n"
+        f"дата: {day_str}\n"
+        f"время: {slot_str}\n"
+        f"до: {exp_str}"
+    )
+
+    try:
+        await bot.send_message(int(ADMIN_CHAT_ID), text)
+        print("ADMIN notify sent", flush=True)
+    except Exception as e:
+        print("ADMIN notify error:", e, flush=True)
 
 # =========================
 # Commands
@@ -556,6 +578,15 @@ async def cb_cart_clear(c: CallbackQuery):
     await c.answer()
     cart_clear(c.from_user.id)
     await c.message.answer("🧹 Корзина очищена.")
+    await notify_admin_reservation(
+        res_id,
+        c.from_user.id,
+        day_str,
+        slot_str,
+        exp_str,
+        items
+)
+
 
 
 @dp.callback_query(F.data == "checkout_start")
