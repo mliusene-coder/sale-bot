@@ -34,6 +34,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import InputMediaPhoto
 
 
 # =========================
@@ -136,6 +137,20 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_res_expires ON reservations(expires_at)")
         conn.commit()
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS item_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL,
+                photo_id TEXT NOT NULL,
+                pos INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(item_id, photo_id)
+            )
+            """
+)
+conn.execute("CREATE INDEX IF NOT EXISTS idx_item_photos_item ON item_photos(item_id)")
+
 
 def now_local() -> datetime:
     return datetime.now(tz=TZ)
@@ -195,6 +210,22 @@ def add_item_to_db(title: str, price: str, photo_id: Optional[str]) -> int:
         )
         conn.commit()
         return int(cur.lastrowid)
+
+def add_item_photo(item_id: int, photo_id: str, pos: int = 0) -> None:
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO item_photos (item_id, photo_id, pos, created_at) VALUES (?, ?, ?, ?)",
+            (item_id, photo_id, pos, iso(now_local())),
+        )
+        conn.commit()
+
+def get_item_photos(item_id: int) -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT photo_id FROM item_photos WHERE item_id=? ORDER BY pos, id",
+            (item_id,),
+        ).fetchall()
+    return [r["photo_id"] for r in rows]
 
 def parse_csv_items(content: str) -> list[tuple[str, str, str | None]]:
     """
@@ -423,19 +454,31 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         kb = kb_item(item_id, bot_username)
 
-        if photo_id:
-            await bot.send_photo(
-                chat_id=CHANNEL_USERNAME,
-                photo=photo_id,
-                caption=post_text,
-                reply_markup=kb
-            )
-        else:
-            await bot.send_message(
-                chat_id=CHANNEL_USERNAME,
-                text=post_text,
-                reply_markup=kb
-            )
+       photos = get_item_photos(item_id)
+
+# если в новой таблице пусто — используем старое поле как fallback
+if not photos and photo_id:
+    photos = [photo_id]
+
+if photos:
+    media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
+    await bot.send_media_group(
+        chat_id=CHANNEL_USERNAME,
+        media=media
+    )
+
+    # отдельным сообщением — текст + кнопка
+    await bot.send_message(
+        chat_id=CHANNEL_USERNAME,
+        text=post_text,
+        reply_markup=kb
+    )
+else:
+    await bot.send_message(
+        chat_id=CHANNEL_USERNAME,
+        text=post_text,
+        reply_markup=kb
+    )
 
         print("=== POST TO CHANNEL: OK ===", flush=True)
 
