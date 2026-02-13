@@ -41,6 +41,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 WAIT_PHOTO_ID = set()
+WAIT_CSV_IMPORT = set()
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
 
@@ -503,6 +504,58 @@ async def cmd_photoid(m: Message):
 
     WAIT_PHOTO_ID.add(m.from_user.id)
     await m.answer("Ок. Пришли ОДНО фото (как фото, не документом). Я пришлю photo_id.")
+@dp.message(Command("csv"))
+async def cmd_csv(m: Message):
+    if m.from_user.id not in ADMIN_IDS:
+        await m.answer("⛔️ Только для админов.")
+        return
+
+    WAIT_CSV_IMPORT.add(m.from_user.id)
+    await m.answer(
+        "Ок. Пришли CSV ФАЙЛОМ (как document).\n\n"
+        "Колонки: title, price, photo\n"
+        "photo — это photo_id (можно пусто)."
+    )
+
+@dp.message(F.document)
+async def on_csv_document(m: Message):
+    # реагируем только если админ и только после /csv
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    if m.from_user.id not in WAIT_CSV_IMPORT:
+        return
+
+    doc = m.document
+    filename = (doc.file_name or "").lower()
+    mime = (doc.mime_type or "").lower()
+
+    if not (filename.endswith(".csv") or mime == "text/csv"):
+        await m.answer("Это не CSV. Пришли файл с расширением .csv")
+        return
+
+    WAIT_CSV_IMPORT.discard(m.from_user.id)
+
+    buf = io.BytesIO()
+    await bot.download(doc, destination=buf)
+    content = buf.getvalue().decode("utf-8-sig", errors="ignore")
+
+    items = parse_csv_items(content)
+    if not items:
+        await m.answer("В файле не нашла ни одной строки с title. Проверь заголовки: title,price,photo")
+        return
+
+    ok = 0
+    fail = 0
+
+    for title, price, photo_id in items:
+        try:
+            item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
+            await publish_item_to_channel(item_id=item_id, title=title, price=price, photo_id=photo_id)
+            ok += 1
+        except Exception:
+            fail += 1
+
+    await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
 @dp.message(Command("cart"))
 async def cmd_cart(m: Message):
@@ -536,7 +589,6 @@ async def cmd_add(m: Message, state: FSMContext):
         "Если отправишь сначала текст — я попрошу фото."
     )
     await state.set_state(AddItemFlow.waiting_photo)
-
 
 @dp.message(AddItemFlow.waiting_photo)
 async def add_item_flow(m: Message, state: FSMContext):
