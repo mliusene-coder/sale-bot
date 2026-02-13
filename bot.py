@@ -625,7 +625,7 @@ async def cb_pick_slot(c: CallbackQuery, state: FSMContext):
     await state.update_data(day=day_str, time=slot_str)
 
     await c.message.answer(
-        f"Подтверди бронь:\n📅 {day_str}\n🕒 {slot_str}\n\n"
+        f"Подтверди бронь:\n📅 {day_str}\n🕒 {slot_str}\n\n",
         reply_markup=kb_confirm(day_str, slot_str),
     )
     
