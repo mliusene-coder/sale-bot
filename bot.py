@@ -415,6 +415,9 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
         raise
         
 async def notify_admin_reservation(res_id, user_id, day_str, slot_str, exp_str, items):
+    print("ADMIN notify: called", flush=True)
+    print("ADMIN notify: ADMIN_CHAT_ID =", repr(ADMIN_CHAT_ID), flush=True)
+
     if not ADMIN_CHAT_ID:
         print("ADMIN notify skipped — no ADMIN_CHAT_ID", flush=True)
         return
@@ -431,8 +434,10 @@ async def notify_admin_reservation(res_id, user_id, day_str, slot_str, exp_str, 
     try:
         await bot.send_message(int(ADMIN_CHAT_ID), text)
         print("ADMIN notify sent", flush=True)
-    except Exception as e:
-        print("ADMIN notify error:", e, flush=True)
+    except Exception:
+        import traceback
+        print("ADMIN notify FAILED", flush=True)
+        traceback.print_exc()
 
 # =========================
 # Commands
@@ -661,6 +666,8 @@ async def cb_confirm(c: CallbackQuery, state: FSMContext):
 
     # очищаем корзину\
     cart_clear(c.from_user.id)
+    
+    await notify_admin_reservation(res_id, c.from_user.id, day_str, slot_str, exp_str, items)
 
     # финальное сообщение — БЕЗ шага "введите адрес"
     await c.message.answer(
