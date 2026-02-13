@@ -149,7 +149,7 @@ def init_db() -> None:
             )
             """
 )
-conn.execute("CREATE INDEX IF NOT EXISTS idx_item_photos_item ON item_photos(item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_item_photos_item ON item_photos(item_id)")
 
 
 def now_local() -> datetime:
