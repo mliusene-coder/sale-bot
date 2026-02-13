@@ -31,7 +31,7 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InputMediaPhoto
@@ -410,8 +410,9 @@ class AddItemFlow(StatesGroup):
 
 
 class AddressFlow(StatesGroup):
-    waiting_address = State()
-
+    waiting_address = State()   
+class AddPhotoFlow(StatesGroup):
+    waiting_photo = State()
 
 # =========================
 # Bot
@@ -533,6 +534,42 @@ async def cmd_csv(m: Message):
         "Колонки: title, price, photo\n"
         "photo — это photo_id (можно пусто)."
     )
+@dp.message(Command("addphoto"))
+async def cmd_addphoto(m: Message, state: FSMContext):
+    if m.from_user.id not in ADMIN_IDS:
+        await m.answer("Только для админов.")
+        return
+
+    parts = m.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await m.answer("Использование: /addphoto <item_id>")
+        return
+
+    item_id = int(parts[1])
+
+    await state.set_state(AddPhotoFlow.waiting_photo)
+    await state.update_data(item_id=item_id)
+
+    await m.answer(f"Ок. Пришли фото для товара #{item_id}")
+    
+@dp.message(AddPhotoFlow.waiting_photo, F.photo)
+async def addphoto_receive(m: Message, state: FSMContext):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+
+    data = await state.get_data()
+    item_id = data["item_id"]
+
+    photo_id = m.photo[-1].file_id
+
+    # позиция = текущее количество фото
+    photos = get_item_photos(item_id)
+    pos = len(photos)
+
+    add_item_photo(item_id, photo_id, pos)
+
+    await state.clear()
+    await m.answer(f"✅ Фото добавлено к товару #{item_id}")
 
 @dp.message(F.document)
 async def on_csv_document(m: Message):
