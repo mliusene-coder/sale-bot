@@ -598,47 +598,47 @@ async def cb_pick_slot(c: CallbackQuery, state: FSMContext):
         "Бронь держится 24 часа после подтверждения.",
         reply_markup=kb_confirm(day_str, slot_str),
     )
-
+    
 @dp.callback_query(F.data.startswith("confirm:"))
 async def cb_confirm(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
     _, day_str, slot_str = c.data.split(":", 2)
 
-items = cart_list(c.from_user.id)
-if not items:
+    items = cart_list(c.from_user.id)
+    if not items:
         await c.message.answer("Корзина пуста. /cart")
         return
 
-bad = [it for it in items if item_is_reserved(int(it["id"]))]
-if bad:
+    bad = [it for it in items if item_is_reserved(int(it["id"]))]
+    if bad:
         await c.message.answer(
             "Упс: кто-то уже забронировал часть товаров. Удали их из корзины и попробуй снова."
         )
         await show_cart(c.from_user.id, c.message)
         return
 
-item_ids = [int(it["id"]) for it in items]
+    item_ids = [int(it["id"]) for it in items]
 
-# создаём бронь
-res_id = create_reservation(c.from_user.id, day_str, slot_str, item_ids)
-r = get_reservation(res_id)
+    # создаём бронь
+    res_id = create_reservation(c.from_user.id, day_str, slot_str, item_ids)
+    r = get_reservation(res_id)
 
-# считаем красивое время окончания
-exp_str = parse_iso(r["expires_at"]).astimezone(TZ).strftime("%d.%m.%Y %H:%M")
+    # считаем красивое время окончания
+    exp_str = parse_iso(r["expires_at"]).astimezone(TZ).strftime("%d.%m.%Y %H:%M")
 
-# очищаем корзину
-cart_clear(c.from_user.id)
+    # очищаем корзину\
+    cart_clear(c.from_user.id)
 
-# финальное сообщение — БЕЗ шага "введите адрес"
-await c.message.answer(
-    "✅ Бронь подтверждена.\n\n"
-    f"📅 {day_str}\n"
-    f"🕒 {slot_str}\n"
-    f"⏳ Бронь до: {exp_str}\n\n"
-    "📍 Самовывоз из Belgrade Waterfront\n"
-    "Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n"
-    "Как подъедете, напишите в тг @liusene"
+    # финальное сообщение — БЕЗ шага "введите адрес"
+    await c.message.answer(
+        "✅ Бронь подтверждена.\n\n"
+        f"📅 {day_str}\n"
+        f"🕒 {slot_str}\n"
+        f"⏳ Бронь до: {exp_str}\n\n"
+        "📍 Самовывоз из Belgrade Waterfront\n"
+        "Адрес: BW Sole. Bulevar Vudroa Vilsona, 17\n"
+        "Как подъедете, напишите в тг @liusene"
 )
 
     
