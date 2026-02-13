@@ -454,33 +454,33 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         kb = kb_item(item_id, bot_username)
 
-       photos = get_item_photos(item_id)
+        photos = get_item_photos(item_id)
 
-# если в новой таблице пусто — используем старое поле как fallback
-if not photos and photo_id:
-    photos = [photo_id]
+        # если в новой таблице пусто — используем старое поле как fallback
+        if not photos and photo_id:
+        photos = [photo_id]
 
-if photos:
-    media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
-    await bot.send_media_group(
-        chat_id=CHANNEL_USERNAME,
-        media=media
-    )
+        if photos:
+        media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
+        await bot.send_media_group(
+            chat_id=CHANNEL_USERNAME,
+            media=media
+        )
 
-    # отдельным сообщением — текст + кнопка
-    await bot.send_message(
-        chat_id=CHANNEL_USERNAME,
-        text=post_text,
-        reply_markup=kb
-    )
-else:
-    await bot.send_message(
-        chat_id=CHANNEL_USERNAME,
-        text=post_text,
-        reply_markup=kb
-    )
+        # отдельным сообщением — текст + кнопка
+        await bot.send_message(
+            chat_id=CHANNEL_USERNAME,
+            text=post_text,
+            reply_markup=kb
+        )
+    else:
+        await bot.send_message(
+            chat_id=CHANNEL_USERNAME,
+            text=post_text,
+            reply_markup=kb
+        )
 
-        print("=== POST TO CHANNEL: OK ===", flush=True)
+    print("=== POST TO CHANNEL: OK ===", flush=True)
 
     except Exception as e:
         import traceback
