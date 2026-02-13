@@ -1,5 +1,7 @@
 import sys
 import traceback
+import csv
+import io
 
 print("=== BOOT: bot.py started ===", flush=True)
 
@@ -192,6 +194,21 @@ def add_item_to_db(title: str, price: str, photo_id: Optional[str]) -> int:
         conn.commit()
         return int(cur.lastrowid)
 
+def parse_csv_items(content: str) -> list[tuple[str, str, str | None]]:
+    """
+    Возвращает список (title, price, photo_id)
+    """
+    f = io.StringIO(content)
+    reader = csv.DictReader(f)
+    out = []
+    for row in reader:
+        title = (row.get("title") or "").strip()
+        price = (row.get("price") or "").strip()
+        photo = (row.get("photo") or "").strip() or None
+        if not title:
+            continue
+        out.append((title, price, photo))
+    return out
 
 def cart_add(user_id: int, item_id: int) -> bool:
     if item_is_reserved(item_id):
@@ -203,7 +220,7 @@ def cart_add(user_id: int, item_id: int) -> bool:
         )
         conn.commit()
         return True
-
+        
 
 def cart_remove(user_id: int, item_id: int) -> None:
     with db() as conn:
@@ -540,7 +557,13 @@ async def add_item_flow(m: Message, state: FSMContext):
         import traceback
         traceback.print_exc()
         await m.answer(f"❌ Не смог отправить в канал. Ошибка: {type(e).__name__}: {e}")
-
+        
+@dp.message(Command("import"))
+async def cmd_import(m: Message):
+    if m.from_user.id not in ADMIN_IDS:
+        await m.answer("⛔️ Только для админов.")
+        return
+        await m.answer("Ок. Теперь пришли CSV-файл (items.csv) документом.")
 
 # =========================
 # Cart & Checkout
