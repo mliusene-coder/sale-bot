@@ -458,7 +458,7 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         # если в новой таблице пусто — используем старое поле как fallback
         if not photos and photo_id:
-        photos = [photo_id]
+            photos = [photo_id]
 
         if photos:
         media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
