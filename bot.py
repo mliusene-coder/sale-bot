@@ -39,10 +39,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
+print("=== ADMIN_CHAT_ID ===", repr(ADMIN_CHAT_ID), flush=True)
+
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "").strip()  # e.g. "@bestgaragesale"
 SUPPORT_TEXT = os.getenv("SUPPORT_TEXT", "Если бот лагает — @liusene").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Belgrade").strip()
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is empty")
