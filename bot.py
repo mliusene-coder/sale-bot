@@ -456,46 +456,34 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         kb = kb_item(item_id, bot_username)
 
-        # ---- MULTI PHOTO BLOCK ----
-        photos = get_item_photos(item_id)
+# ---- MULTI PHOTO BLOCK ----
+photos = get_item_photos(item_id)
 
-        if not photos and photo_id:
-            photos = [photo_id]
+if not photos and photo_id:
+    photos = [photo_id]
 
-        if photos:
-            media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
+if photos:
+    media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
+    await bot.send_media_group(
+        chat_id=CHANNEL_USERNAME,
+        media=media
+    )
 
-            # анти-флуд: если Telegram просит подождать — ждём и повторяем
-            while True:
-                try:
-                    await bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
-                    break
-                except TelegramRetryAfter as e:
-                    wait_s = int(getattr(e, "retry_after", 5)) + 1
-                    print(f"FLOOD CONTROL: wait {wait_s}s", flush=True)
-                    await asyncio.sleep(wait_s)
-                except Exception as e:
-                    print("MEDIA GROUP FAIL (bad photo_id?):", e, flush=True)
-                    # фоллбек: если альбом не отправился — отправим просто текст с кнопкой
-                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=post_text, reply_markup=kb)
-                    break
+    await bot.send_message(
+        chat_id=CHANNEL_USERNAME,
+        text=post_text,
+        reply_markup=kb
+    )
 
-            # отдельным сообщением — текст + кнопка
-            await bot.send_message(
-                chat_id=CHANNEL_USERNAME,
-                text=post_text,
-                reply_markup=kb
-            )
-
-        else:
-            await bot.send_message(
-                chat_id=CHANNEL_USERNAME,
-                text=post_text,
-                reply_markup=kb
-        )
+else:
+    await bot.send_message(
+        chat_id=CHANNEL_USERNAME,
+        text=post_text,
+        reply_markup=kb
+    )
 
 
-        print("=== POST TO CHANNEL: OK ===", flush=True)
+    print("=== POST TO CHANNEL: OK ===", flush=True)
 
     except Exception as e:
         import traceback
