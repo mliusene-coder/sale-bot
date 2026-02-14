@@ -604,8 +604,8 @@ async def on_csv_document(m: Message):
     fail = 0
 
     for title, price, photo_id in items:
-    try:
-        item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
+        try:
+            item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
 
         await publish_item_to_channel(
             item_id=item_id,
