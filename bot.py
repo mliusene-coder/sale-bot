@@ -688,7 +688,7 @@ async def add_item_flow(m: Message, state: FSMContext):
     item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
 
     try:
-        await publish_item_to_channel(item_id, title, price, photo_id)
+        await publish_item_to_channel(item_id, title, price, None)
         await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
         await state.clear()
     except Exception as e:
