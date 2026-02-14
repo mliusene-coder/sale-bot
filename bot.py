@@ -606,7 +606,10 @@ async def on_csv_document(m: Message):
             item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
             await publish_item_to_channel(item_id=item_id, title=title, price=price, photo_id=photo_id)
             ok += 1
-        except Exception:
+       except Exception:
+            import traceback
+            print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
+            traceback.print_exc()
             fail += 1
 
     await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
