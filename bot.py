@@ -604,28 +604,26 @@ async def on_csv_document(m: Message):
     fail = 0
 
     for title, price, photo_id in items:
-    while True:
-        try:
-            item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
-            await publish_item_to_channel(item_id=item_id, title=title, price=price, photo_id=photo_id)
+    try:
+        item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
 
-            ok += 1
+        await publish_item_to_channel(
+            item_id=item_id,
+            title=title,
+            price=price,
+            photo_id=photo_id
+        )
 
-            # маленькая пауза между постами, чтобы меньше ловить лимиты
-            await asyncio.sleep(1.2)
-            break
+        ok += 1
 
-        except TelegramRetryAfter as e:
-            wait_s = int(getattr(e, "retry_after", 5)) + 1
-            print(f"CSV IMPORT: FLOOD CONTROL: wait {wait_s}s", flush=True)
-            await asyncio.sleep(wait_s)
+        # небольшая пауза между постами
+        await asyncio.sleep(1.2)
 
-        except Exception:
-            import traceback
-            print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
-            traceback.print_exc()
-            fail += 1
-            break
+    except Exception:
+        import traceback
+        print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
+        traceback.print_exc()
+        fail += 1
 
     await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
