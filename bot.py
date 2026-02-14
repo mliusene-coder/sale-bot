@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import asyncio
+from aiogram.exceptions import TelegramRetryAfter
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -463,22 +464,36 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         if photos:
             media = [InputMediaPhoto(media=pid) for pid in photos[:10]]
-            await bot.send_media_group(
-                chat_id=CHANNEL_USERNAME,
-                media=media
-            )
 
+            # анти-флуд: если Telegram просит подождать — ждём и повторяем
+            while True:
+                try:
+                    await bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
+                    break
+                except TelegramRetryAfter as e:
+                    wait_s = int(getattr(e, "retry_after", 5)) + 1
+                    print(f"FLOOD CONTROL: wait {wait_s}s", flush=True)
+                    await asyncio.sleep(wait_s)
+                except Exception as e:
+                    print("MEDIA GROUP FAIL (bad photo_id?):", e, flush=True)
+                    # фоллбек: если альбом не отправился — отправим просто текст с кнопкой
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=post_text, reply_markup=kb)
+                    break
+
+            # отдельным сообщением — текст + кнопка
             await bot.send_message(
                 chat_id=CHANNEL_USERNAME,
                 text=post_text,
                 reply_markup=kb
             )
+
         else:
             await bot.send_message(
                 chat_id=CHANNEL_USERNAME,
                 text=post_text,
                 reply_markup=kb
-            )
+        )
+
 
         print("=== POST TO CHANNEL: OK ===", flush=True)
 
@@ -602,15 +617,28 @@ async def on_csv_document(m: Message):
     fail = 0
 
     for title, price, photo_id in items:
+    while True:
         try:
             item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
             await publish_item_to_channel(item_id=item_id, title=title, price=price, photo_id=photo_id)
+
             ok += 1
+
+            # маленькая пауза между постами, чтобы меньше ловить лимиты
+            await asyncio.sleep(1.2)
+            break
+
+        except TelegramRetryAfter as e:
+            wait_s = int(getattr(e, "retry_after", 5)) + 1
+            print(f"CSV IMPORT: FLOOD CONTROL: wait {wait_s}s", flush=True)
+            await asyncio.sleep(wait_s)
+
         except Exception:
             import traceback
             print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
             traceback.print_exc()
             fail += 1
+            break
 
     await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
