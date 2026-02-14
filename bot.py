@@ -451,7 +451,7 @@ async def publish_item_to_channel(item_id: int, title: str, price: str, photo_id
 
         post_text = f"🛍 {title}"
         if price:
-            post_text += f"\n💰 {price}"
+        post_text += f"\n💰 {price}"
         post_text += f"\n\nℹ️ {SUPPORT_TEXT}"
 
         kb = kb_item(item_id, bot_username)
@@ -483,9 +483,9 @@ else:
     )
 
 
-    print("=== POST TO CHANNEL: OK ===", flush=True)
+print("=== POST TO CHANNEL: OK ===", flush=True)
 
-    except Exception as e:
+except Exception as e:
         import traceback
         print("=== POST TO CHANNEL: FAIL ===", flush=True)
         traceback.print_exc()
