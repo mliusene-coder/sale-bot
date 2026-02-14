@@ -615,8 +615,6 @@ async def on_csv_document(m: Message):
         )
 
         ok += 1
-
-        # небольшая пауза между постами
         await asyncio.sleep(1.2)
 
     except Exception:
@@ -624,7 +622,7 @@ async def on_csv_document(m: Message):
         print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
         traceback.print_exc()
         fail += 1
-
+        
     await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
 @dp.message(Command("cart"))
