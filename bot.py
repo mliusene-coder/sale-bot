@@ -575,54 +575,42 @@ async def addphoto_receive(m: Message, state: FSMContext):
 
 @dp.message(F.document)
 async def on_csv_document(m: Message):
-    # реагируем только если админ и только после /csv
-    if m.from_user.id not in ADMIN_IDS:
-        return
-    if m.from_user.id not in WAIT_CSV_IMPORT:
+    if not m.document.file_name.lower().endswith(".csv"):
         return
 
-    doc = m.document
-    filename = (doc.file_name or "").lower()
-    mime = (doc.mime_type or "").lower()
-
-    if not (filename.endswith(".csv") or mime == "text/csv"):
-        await m.answer("Это не CSV. Пришли файл с расширением .csv")
-        return
-
-    WAIT_CSV_IMPORT.discard(m.from_user.id)
-
-    buf = io.BytesIO()
-    await bot.download(doc, destination=buf)
-    content = buf.getvalue().decode("utf-8-sig", errors="ignore")
+    file = await bot.get_file(m.document.file_id)
+    data = await bot.download_file(file.file_path)
+    content = data.read().decode("utf-8")
 
     items = parse_csv_items(content)
-    if not items:
-        await m.answer("В файле не нашла ни одной строки с title. Проверь заголовки: title,price,photo")
-        return
 
     ok = 0
     fail = 0
 
     for title, price, photo_id in items:
         try:
-            item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
+            item_id = add_item_to_db(
+                title=title,
+                price=price,
+                photo_id=photo_id
+            )
 
-        await publish_item_to_channel(
-            item_id=item_id,
-            title=title,
-            price=price,
-            photo_id=photo_id
-        )
+            await publish_item_to_channel(
+                item_id=item_id,
+                title=title,
+                price=price,
+                photo_id=photo_id
+            )
 
-        ok += 1
-        await asyncio.sleep(1.2)
+            ok += 1
+            await asyncio.sleep(1.2)
 
-    except Exception:
-        import traceback
-        print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
-        traceback.print_exc()
-        fail += 1
-        
+        except Exception:
+            import traceback
+            print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
+            traceback.print_exc()
+            fail += 1
+
     await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
 @dp.message(Command("cart"))
