@@ -228,22 +228,29 @@ def get_item_photos(item_id: int) -> list[str]:
         ).fetchall()
     return [r["photo_id"] for r in rows]
 
-def parse_csv_items(content: str) -> list[tuple[str, str, str | None]]:
-    """
-    Возвращает список (title, price, photo_id)
-    """
+def parse_csv_items(content: str) -> list[tuple[str, str, list[str]]]:
+    import csv
+    import io
+
     f = io.StringIO(content)
     reader = csv.DictReader(f)
+
     out = []
+
     for row in reader:
         title = (row.get("title") or "").strip()
         price = (row.get("price") or "").strip()
-        photo = (row.get("photo") or "").strip() or None
+        photo_raw = (row.get("photo") or "").strip()
+
         if not title:
             continue
-        out.append((title, price, photo))
-    return out
 
+        photo_ids = [p.strip() for p in photo_raw.split(",") if p.strip()]
+
+        out.append((title, price, photo_ids))
+
+    return out
+    
 def cart_add(user_id: int, item_id: int) -> bool:
     if item_is_reserved(item_id):
         return False
@@ -587,7 +594,7 @@ async def on_csv_document(m: Message):
     ok = 0
     fail = 0
 
-    for title, price, photo_id in items:
+    for title, price, photo_ids in items:
         try:
             item_id = add_item_to_db(
                 title=title,
@@ -677,11 +684,13 @@ async def add_item_flow(m: Message, state: FSMContext):
         return
 
     photo_id = m.photo[-1].file_id
+
     item_id = add_item_to_db(title=title, price=price, photo_id=photo_id)
 
     try:
         await publish_item_to_channel(item_id, title, price, photo_id)
         await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
+        await state.clear()
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -692,7 +701,7 @@ async def cmd_import(m: Message):
     if m.from_user.id not in ADMIN_IDS:
         await m.answer("⛔️ Только для админов.")
         return
-        await m.answer("Ок. Теперь пришли CSV-файл (items.csv) документом.")
+    await m.answer("Ок. Теперь пришли CSV-файл (items.csv) документом.")
 
 # =========================
 # Cart & Checkout
