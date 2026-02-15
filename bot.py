@@ -54,8 +54,7 @@ ADMIN_IDS = {
 }
 ADMIN_CHAT_ID = int(ADMIN_CHAT_ID_RAW) if ADMIN_CHAT_ID_RAW.isdigit() else None
 TZ = ZoneInfo(TIMEZONE)
-DB_PATH = "sale.db"
-
+DB_PATH = os.path.join(os.path.dirname(__file__), "sale.db")
 
 # =========================
 # DB
