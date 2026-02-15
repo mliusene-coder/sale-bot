@@ -531,6 +531,7 @@ async def cmd_photoid(m: Message):
 
     WAIT_PHOTO_ID.add(m.from_user.id)
     await m.answer("Ок. Пришли ОДНО фото (как фото, не документом). Я пришлю photo_id.")
+    
 @dp.message(Command("csv"))
 async def cmd_csv(m: Message):
     if m.from_user.id not in ADMIN_IDS:
@@ -609,31 +610,37 @@ async def on_csv_document(m: Message):
     ok = 0
     fail = 0
 
-    for title, price, photo_ids in items:
-        try:
-            item_id = add_item_to_db(
-                title=title,
-                price=price,
-                photo_id=photo_id
-            )
+    for title, price, photo_id in items:
+    try:
+        # создаём товар
+        item_id = add_item_to_db(
+            title=title,
+            price=price,
+            photo_id=photo_id
+        )
 
-            await publish_item_to_channel(
-                item_id=item_id,
-                title=title,
-                price=price,
-                photo_id=photo_id
-            )
+        # если есть фото — кладём в таблицу фото
+        if photo_id:
+            add_item_photo(item_id=item_id, photo_id=photo_id, pos=0)
 
-            ok += 1
-            await asyncio.sleep(1.2)
+        # публикуем
+        await publish_item_to_channel(
+            item_id=item_id,
+            title=title,
+            price=price,
+            photo_id=photo_id
+        )
 
-        except Exception:
-            import traceback
-            print("CSV IMPORT FAIL:", repr(title), repr(price), repr(photo_id), flush=True)
-            traceback.print_exc()
-            fail += 1
+        ok += 1
+        await asyncio.sleep(1.2)
 
-    await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
+    except Exception as e:
+        import traceback
+        print("CSV IMPORT FAIL:", title, price, photo_id, flush=True)
+        traceback.print_exc()
+        fail += 1
+
+        await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
 @dp.message(Command("cart"))
 async def cmd_cart(m: Message):
