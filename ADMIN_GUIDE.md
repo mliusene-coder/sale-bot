@@ -1,10 +1,3 @@
-(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/ADMIN_GUIDE.md b/ADMIN_GUIDE.md
-new file mode 100644
-index 0000000000000000000000000000000000000000..32f0a19d3326257644003ac53638e373cffaef46
---- /dev/null
-+++ b/ADMIN_GUIDE.md
-@@ -0,0 +1,62 @@
 +# Sale Bot — инструкция для админа
 +
 +## 1) Переменные Railway
