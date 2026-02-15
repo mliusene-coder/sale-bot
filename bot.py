@@ -679,7 +679,15 @@ async def update_channel_post(item_id: int) -> None:
 
 
 def parse_csv_rows(content: str) -> list[CsvRow]:
-    reader = csv.DictReader(io.StringIO(content))
+    # авто-определяем разделитель CSV: ; или ,
+    sample = content[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+    except Exception:
+        dialect = csv.excel  # fallback
+
+    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+
     rows = []
     for row in reader:
         title = (row.get("title") or "").strip()
@@ -690,7 +698,6 @@ def parse_csv_rows(content: str) -> list[CsvRow]:
         photos = parse_photos_field((row.get("photos") or row.get("photo") or "").strip())
         rows.append(CsvRow(title=title, price=price, description=description, photos=photos))
     return rows
-
 
 # =========================
 # User commands
@@ -772,29 +779,37 @@ async def cmd_add(m: Message):
     )
 
 
-@dp.message(F.text.startswith("/add "))
-async def cmd_add_inline(m: Message):
+@dp.message(Command("add"))
+async def cmd_add(m: Message):
     if not is_admin(m.from_user.id):
+        await m.answer("⛔ Только для админов")
         return
 
-    payload = m.text[5:].strip()
-    parts = [x.strip() for x in payload.split("|")]
-    if len(parts) < 1 or not parts[0]:
-        await m.answer("Ошибка формата. Пример: /add Платье | 2500 | Отличное состояние | <photo_id>")
+    payload = (m.text or "").split(maxsplit=1)
+
+    # /add без текста → показать инструкцию
+    if len(payload) == 1:
+        await m.answer(
+            "Формат:\n"
+            "/add Название | Цена | Описание | photo_id1|photo_id2\n\n"
+            "Описание и фото можно пропускать."
+        )
         return
 
-    title = parts[0]
+    raw = payload[1].strip()
+    parts = [x.strip() for x in raw.split("|")]
+
+    title = parts[0] if len(parts) > 0 else ""
     price = parts[1] if len(parts) > 1 else ""
     description = parts[2] if len(parts) > 2 else ""
-    photos = parts[3:] if len(parts) > 3 else []
-    photos = [p.strip() for p in photos if p.strip()]
+    photos = [p.strip() for p in parts[3:] if p.strip()]  # всё после 3-го поля — фото
+
+    if not title:
+        await m.answer("Нет названия. Пример: /add Платье | 2500 | описание | <photo_id>")
+        return
 
     item_id = add_item(title=title, price=price, description=description, photos=photos)
-    try:
-        await publish_item(item_id)
-    except Exception as e:
-        await m.answer(f"Товар сохранён #{item_id}, но не удалось опубликовать: {type(e).__name__}: {e}")
-        return
+    await publish_item(item_id)
     await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
 
 
