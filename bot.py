@@ -55,6 +55,22 @@ if not BOT_TOKEN:
 if not CHANNEL_USERNAME:
     raise RuntimeError("CHANNEL_USERNAME is empty (example: @my_channel)")
 
+
+def normalize_channel_target(raw_value: str) -> str | int:
+    value = (raw_value or "").strip()
+    if not value:
+        raise RuntimeError("CHANNEL_USERNAME is empty (example: @my_channel)")
+    if value.startswith("-100") and value[1:].isdigit():
+        return int(value)
+    if value.startswith("http://") or value.startswith("https://"):
+        value = value.rstrip("/").rsplit("/", 1)[-1].strip()
+    if value.startswith("@"):
+        value = value[1:]
+    value = value.strip()
+    if not value:
+        raise RuntimeError("CHANNEL_USERNAME must be @channel, channel, t.me/channel or -100...")
+    return f"@{value}"
+
 ADMIN_IDS = {
     int(x)
     for x in re.split(r"[,\s]+", ADMIN_IDS_RAW)
@@ -63,6 +79,7 @@ ADMIN_IDS = {
 ADMIN_CHAT_ID = int(ADMIN_CHAT_ID_RAW) if ADMIN_CHAT_ID_RAW.isdigit() else None
 TZ = ZoneInfo(TIMEZONE)
 DB_PATH = "sale.db"
+CHANNEL_TARGET = normalize_channel_target(CHANNEL_USERNAME)
 
 
 def get_runtime_revision() -> str:
@@ -665,16 +682,16 @@ class CsvRow:
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in ADMIN_IDS or (ADMIN_CHAT_ID is not None and user_id == ADMIN_CHAT_ID)
 
 
 def kb_item(item_id: int, bot_username: str) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(text="🛒 В корзину", callback_data=f"cart_add:{item_id}")]
+    if bot_username:
+        row.append(InlineKeyboardButton(text="✅ Оформить в боте", url=f"https://t.me/{bot_username}?start=checkout"))
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🛒 В корзину", callback_data=f"cart_add:{item_id}"),
-                InlineKeyboardButton(text="✅ Оформить в боте", url=f"https://t.me/{bot_username}?start=checkout"),
-            ]
+            row
         ]
     )
 
@@ -836,14 +853,14 @@ async def publish_item(item_id: int) -> None:
     reply_markup = kb_item(item_id, username) if item["status"] == "ACTIVE" else None
     if photos:
         msg = await bot.send_photo(
-            chat_id=CHANNEL_USERNAME,
+            chat_id=CHANNEL_TARGET,
             photo=photos[0],
             caption=text,
             reply_markup=reply_markup,
         )
     else:
         msg = await bot.send_message(
-            chat_id=CHANNEL_USERNAME,
+            chat_id=CHANNEL_TARGET,
             text=text,
             reply_markup=reply_markup,
         )
@@ -862,7 +879,7 @@ async def update_channel_post(item_id: int) -> None:
 
     if item["status"] == "SOLD":
         with suppress(TelegramBadRequest):
-            await bot.delete_message(chat_id=CHANNEL_USERNAME, message_id=int(item["channel_message_id"]))
+            await bot.delete_message(chat_id=CHANNEL_TARGET, message_id=int(item["channel_message_id"]))
         clear_item_channel_message(item_id)
         return
 
@@ -873,14 +890,14 @@ async def update_channel_post(item_id: int) -> None:
     try:
         if has_photo:
             await bot.edit_message_caption(
-                chat_id=CHANNEL_USERNAME,
+                chat_id=CHANNEL_TARGET,
                 message_id=int(item["channel_message_id"]),
                 caption=item_text(item),
                 reply_markup=reply_markup,
             )
         else:
             await bot.edit_message_text(
-                chat_id=CHANNEL_USERNAME,
+                chat_id=CHANNEL_TARGET,
                 message_id=int(item["channel_message_id"]),
                 text=item_text(item),
                 reply_markup=reply_markup,
