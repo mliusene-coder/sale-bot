@@ -494,6 +494,14 @@ def day_blocks(day_str: str) -> list[sqlite3.Row]:
             "SELECT day, slot, reason FROM slot_blocks WHERE day=? ORDER BY slot",
             (day_str,),
         ).fetchall()
+def slot_is_blocked(day_str: str, slot: str) -> bool:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM slot_blocks WHERE day=? AND slot=? LIMIT 1",
+            (day_str, slot),
+        ).fetchone()
+        return row is not None
+
 
 
 # =========================
@@ -594,7 +602,60 @@ def kb_confirm(day_str: str, slot: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"pick_day:{day_str}")],
         ]
     )
+    
+def kb_admin_days() -> InlineKeyboardMarkup:
+    today = now_local().date()
+    rows = []
+    for i in range(14):
+        d = today + timedelta(days=i)
+        rows.append([
+            InlineKeyboardButton(
+                text=d.strftime("%a %d.%m"),
+                callback_data=f"admin_day:{d.isoformat()}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="noop")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def kb_admin_slots(day_str: str) -> InlineKeyboardMarkup:
+    rows = []
+
+    rows.append([InlineKeyboardButton(
+        text="🚫 Заблокировать весь день",
+        callback_data=f"admin_blockday:{day_str}"
+    )])
+    rows.append([InlineKeyboardButton(
+        text="✅ Открыть весь день",
+        callback_data=f"admin_unblockday:{day_str}"
+    )])
+    rows.append([InlineKeyboardButton(text="—", callback_data="noop")])
+
+    for slot in generate_slots():
+        if reservation_slot_taken(day_str, slot) and not slot_is_blocked(day_str, slot):
+            rows.append([InlineKeyboardButton(
+                text=f"🔒 {slot} занят",
+                callback_data="noop"
+            )])
+            continue
+
+        if slot_is_blocked(day_str, slot):
+            rows.append([InlineKeyboardButton(
+                text=f"🚫 {slot} — открыть",
+                callback_data=f"admin_toggle:{day_str}:{slot}"
+            )])
+        else:
+            rows.append([InlineKeyboardButton(
+                text=f"✅ {slot} — закрыть",
+                callback_data=f"admin_toggle:{day_str}:{slot}"
+            )])
+
+    rows.append([InlineKeyboardButton(
+        text="⬅️ Назад к дням",
+        callback_data="admin_back_days"
+    )])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def safe_send_message(chat_id: int, text: str) -> None:
     try:
@@ -968,7 +1029,7 @@ async def cmd_block(m: Message):
         return
     parts = (m.text or "").split()
     if len(parts) < 3:
-        await m.answer("Использование: /block YYYY-MM-DD HH:MM [HH:MM] [причина]")
+        await m.answer("Использование: /block YYYY-MM-DD HH:MM [HH:MM]")
         return
 
     day_str = parts[1]
@@ -987,7 +1048,15 @@ async def cmd_block(m: Message):
     except Exception as e:
         await m.answer(f"Ошибка: {e}")
 
-
+@dp.message(Command("adminslots"))
+async def cmd_adminslots(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await m.answer(
+        "Выбери день для управления слотами:",
+        reply_markup=kb_admin_days()
+    )
+    
 @dp.message(Command("unblock"))
 async def cmd_unblock(m: Message):
     if not is_admin(m.from_user.id):
@@ -1111,6 +1180,89 @@ async def cb_pick_day(c: CallbackQuery):
     await c.answer()
     day_str = c.data.split(":", 1)[1]
     await c.message.answer(f"Выбери слот на {day_str}", reply_markup=kb_slots(day_str))
+
+@dp.callback_query(F.data == "admin_back_days")
+async def cb_admin_back_days(c: CallbackQuery):
+    if not is_admin(c.from_user.id):
+        await c.answer("⛔ Только для админов", show_alert=True)
+        return
+    await c.answer()
+    await c.message.answer("Выбери день:", reply_markup=kb_admin_days())
+
+
+@dp.callback_query(F.data.startswith("admin_day:"))
+async def cb_admin_day(c: CallbackQuery):
+    if not is_admin(c.from_user.id):
+        await c.answer("⛔ Только для админов", show_alert=True)
+        return
+    await c.answer()
+    day_str = c.data.split(":", 1)[1]
+    await c.message.answer(
+        f"Слоты на {day_str}:",
+        reply_markup=kb_admin_slots(day_str)
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_toggle:"))
+async def cb_admin_toggle(c: CallbackQuery):
+    if not is_admin(c.from_user.id):
+        await c.answer("⛔ Только для админов", show_alert=True)
+        return
+
+    _, day_str, slot = c.data.split(":", 2)
+
+    if reservation_slot_taken(day_str, slot) and not slot_is_blocked(day_str, slot):
+        await c.answer("🔒 Уже занято бронью", show_alert=True)
+        return
+
+    if slot_is_blocked(day_str, slot):
+        unblock_slots(day_str, [slot])
+        await c.answer("Открыто")
+    else:
+        block_slots(day_str, [slot], "Недоступно", c.from_user.id)
+        await c.answer("Закрыто")
+
+    await c.message.answer(
+        f"Слоты на {day_str}:",
+        reply_markup=kb_admin_slots(day_str)
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_blockday:"))
+async def cb_admin_blockday(c: CallbackQuery):
+    if not is_admin(c.from_user.id):
+        await c.answer("⛔ Только для админов", show_alert=True)
+        return
+
+    await c.answer()
+    day_str = c.data.split(":", 1)[1]
+
+    slots = [s for s in generate_slots()
+             if not reservation_slot_taken(day_str, s)]
+
+    block_slots(day_str, slots, "Недоступно", c.from_user.id)
+
+    await c.message.answer(
+        f"День {day_str} закрыт",
+        reply_markup=kb_admin_slots(day_str)
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_unblockday:"))
+async def cb_admin_unblockday(c: CallbackQuery):
+    if not is_admin(c.from_user.id):
+        await c.answer("⛔ Только для админов", show_alert=True)
+        return
+
+    await c.answer()
+    day_str = c.data.split(":", 1)[1]
+
+    unblock_slots(day_str, generate_slots())
+
+    await c.message.answer(
+        f"День {day_str} открыт",
+        reply_markup=kb_admin_slots(day_str)
+    )
 
 
 @dp.callback_query(F.data.startswith("pick_slot:"))
