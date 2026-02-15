@@ -1,9 +1,11 @@
 import asyncio
 import csv
 import io
+import logging
 import os
 import re
 import sqlite3
+import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -11,7 +13,12 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramConflictError,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -20,9 +27,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto,
     Message,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # =========================
@@ -47,6 +55,22 @@ if not BOT_TOKEN:
 if not CHANNEL_USERNAME:
     raise RuntimeError("CHANNEL_USERNAME is empty (example: @my_channel)")
 
+
+def normalize_channel_target(raw_value: str) -> str | int:
+    value = (raw_value or "").strip()
+    if not value:
+        raise RuntimeError("CHANNEL_USERNAME is empty (example: @my_channel)")
+    if value.startswith("-100") and value[1:].isdigit():
+        return int(value)
+    if value.startswith("http://") or value.startswith("https://"):
+        value = value.rstrip("/").rsplit("/", 1)[-1].strip()
+    if value.startswith("@"):
+        value = value[1:]
+    value = value.strip()
+    if not value:
+        raise RuntimeError("CHANNEL_USERNAME must be @channel, channel, t.me/channel or -100...")
+    return f"@{value}"
+
 ADMIN_IDS = {
     int(x)
     for x in re.split(r"[,\s]+", ADMIN_IDS_RAW)
@@ -55,6 +79,23 @@ ADMIN_IDS = {
 ADMIN_CHAT_ID = int(ADMIN_CHAT_ID_RAW) if ADMIN_CHAT_ID_RAW.isdigit() else None
 TZ = ZoneInfo(TIMEZONE)
 DB_PATH = "sale.db"
+CHANNEL_TARGET = normalize_channel_target(CHANNEL_USERNAME)
+
+
+def get_runtime_revision() -> str:
+    env_rev = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT") or "").strip()
+    if env_rev:
+        return env_rev[:12]
+    try:
+        rev = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
+        if rev:
+            return rev
+    except Exception:
+        pass
+    return "unknown"
+
+
+RUNTIME_REVISION = get_runtime_revision()
 
 
 # =========================
@@ -157,11 +198,38 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reservations_day_slot ON reservations(day, slot)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reservations_exp ON reservations(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_slot_blocks_day ON slot_blocks(day)")
+
+        item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+        if "status" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN status TEXT DEFAULT 'ACTIVE'")
+        if "is_active" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN is_active INTEGER DEFAULT 1")
+        if "channel_message_id" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN channel_message_id INTEGER")
+        if "created_at" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN created_at TEXT")
+        if "updated_at" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN updated_at TEXT")
+
+        now_iso = iso(now_local())
+        conn.execute("UPDATE items SET status='ACTIVE' WHERE status IS NULL OR trim(status)='' ")
+        conn.execute("UPDATE items SET status=upper(status) WHERE status IS NOT NULL")
+        conn.execute("UPDATE items SET is_active=1 WHERE is_active IS NULL")
+        conn.execute("UPDATE items SET created_at=? WHERE created_at IS NULL OR trim(created_at)=''", (now_iso,))
+        conn.execute("UPDATE items SET updated_at=? WHERE updated_at IS NULL OR trim(updated_at)=''", (now_iso,))
+
         conn.commit()
 
 
 def item_text(item: sqlite3.Row) -> str:
     lines = [f"🛍 {item['title']}"]
+
+    status = item["status"]
+    if status == "RESERVED":
+        lines.append("🟡 Забронировано")
+    elif status == "SOLD":
+        lines.append("🔴 Нет в наличии")
+
     if item["price"]:
         lines.append(f"💰 {item['price']}")
     if item["description"]:
@@ -186,12 +254,41 @@ def parse_title_block(text: str) -> tuple[Optional[str], str, str]:
 def parse_photos_field(value: str) -> list[str]:
     if not value:
         return []
-    out = []
-    for chunk in value.replace(",", "|").split("|"):
+    # Telegram file_id может приходить в несколько строк/через разные разделители.
+    # Нормализуем наиболее частые форматы: | , ; и любые переводы строк.
+    chunks = re.split(r"[|,;\n\r]+", value)
+    out: list[str] = []
+    for chunk in chunks:
         pid = chunk.strip()
-        if pid:
-            out.append(pid)
+        if not pid:
+            continue
+        # Защита от случайного мусора в поле (например, комментариев в скобках).
+        # Берём только первый токен до пробела.
+        pid = pid.split()[0]
+        out.append(pid)
     return out
+
+
+def looks_like_photo_id_list(value: str) -> bool:
+    """Heuristic: Telegram file_id(s) are long opaque tokens, not natural descriptions."""
+    tokens = parse_photos_field(value)
+    if not tokens:
+        return False
+    for tok in tokens:
+        if len(tok) < 20:
+            return False
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", tok):
+            return False
+    return True
+
+
+def extract_photo_from_message_context(m: Message) -> tuple[Optional[str], str]:
+    """Return best photo file_id from current message or replied message."""
+    if m.photo:
+        return m.photo[-1].file_id, "message.photo"
+    if m.reply_to_message and m.reply_to_message.photo:
+        return m.reply_to_message.photo[-1].file_id, "reply.photo"
+    return None, "none"
 
 
 def add_item(title: str, price: str, description: str, photos: list[str]) -> int:
@@ -214,6 +311,23 @@ def add_item(title: str, price: str, description: str, photos: list[str]) -> int
         return item_id
 
 
+def find_item_by_fields(title: str, price: str, description: str) -> Optional[int]:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM items
+            WHERE lower(trim(title)) = lower(trim(?))
+              AND lower(trim(coalesce(price, ''))) = lower(trim(?))
+              AND lower(trim(coalesce(description, ''))) = lower(trim(?))
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (title, price or "", description or ""),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+
 def get_item(item_id: int) -> Optional[sqlite3.Row]:
     with db() as conn:
         return conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
@@ -226,6 +340,14 @@ def get_item_photos(item_id: int) -> list[str]:
             (item_id,),
         ).fetchall()
         return [r["photo_id"] for r in rows]
+
+
+def item_is_available(item: sqlite3.Row | None) -> bool:
+    if not item:
+        return False
+    status = str(item["status"] or "ACTIVE").strip().upper()
+    is_active = 1 if item["is_active"] is None else int(item["is_active"])
+    return status == "ACTIVE" and is_active == 1
 
 
 def add_photo_to_item(item_id: int, photo_id: str) -> None:
@@ -273,6 +395,15 @@ def set_item_channel_message(item_id: int, message_id: int) -> None:
         conn.commit()
 
 
+def clear_item_channel_message(item_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE items SET channel_message_id=NULL, updated_at=? WHERE id=?",
+            (iso(now_local()), item_id),
+        )
+        conn.commit()
+
+
 def cart_add(user_id: int, item_id: int) -> bool:
     if item_is_reserved(item_id):
         return False
@@ -305,7 +436,7 @@ def cart_list(user_id: int) -> list[sqlite3.Row]:
             SELECT i.*
             FROM carts c
             JOIN items i ON i.id = c.item_id
-            WHERE c.user_id=? AND i.status='ACTIVE' AND i.is_active=1
+            WHERE c.user_id=? AND coalesce(nullif(trim(i.status), ''), 'ACTIVE')='ACTIVE' AND coalesce(i.is_active, 1)=1
             ORDER BY c.added_at ASC
             """,
             (user_id,),
@@ -464,6 +595,28 @@ def parse_slot_range(start_slot: str, end_slot: Optional[str]) -> list[str]:
     return slots
 
 
+def parse_slot_selection(start_or_list: str, end_slot: Optional[str]) -> list[str]:
+    """Parse either range (10:00 12:00) or explicit list (10:00,11:00,13:00)."""
+    explicit_list = any(sep in start_or_list for sep in [",", ";"])
+    if explicit_list:
+        if end_slot is not None:
+            raise ValueError("list_and_range_conflict")
+        slots = [x.strip() for x in re.split(r"[,;]", start_or_list) if x.strip()]
+    else:
+        slots = parse_slot_range(start_or_list, end_slot)
+
+    allowed = set(generate_slots())
+    uniq: list[str] = []
+    for slot in slots:
+        if slot not in allowed:
+            raise ValueError(f"invalid_slot:{slot}")
+        if slot not in uniq:
+            uniq.append(slot)
+    if not uniq:
+        raise ValueError("empty_slots")
+    return uniq
+
+
 def block_slots(day_str: str, slots: list[str], reason: str, created_by: int) -> int:
     cnt = 0
     with db() as conn:
@@ -529,16 +682,16 @@ class CsvRow:
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in ADMIN_IDS or (ADMIN_CHAT_ID is not None and user_id == ADMIN_CHAT_ID)
 
 
 def kb_item(item_id: int, bot_username: str) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(text="🛒 В корзину", callback_data=f"cart_add:{item_id}")]
+    if bot_username:
+        row.append(InlineKeyboardButton(text="✅ Оформить в боте", url=f"https://t.me/{bot_username}?start=checkout"))
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🛒 В корзину", callback_data=f"cart_add:{item_id}"),
-                InlineKeyboardButton(text="✅ Оформить в боте", url=f"https://t.me/{bot_username}?start=checkout"),
-            ]
+            row
         ]
     )
 
@@ -597,6 +750,14 @@ def kb_confirm(day_str: str, slot: str) -> InlineKeyboardMarkup:
     )
 
 
+def kb_after_reservation(res_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_res:{res_id}")],
+        ]
+    )
+
+
 async def safe_send_message(chat_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id, text)
@@ -608,15 +769,31 @@ async def safe_send_message(chat_id: int, text: str) -> None:
         pass
 
 
+def user_label(user_id: int, user: object | None = None) -> str:
+    username = getattr(user, "username", None) if user else None
+    full_name = getattr(user, "full_name", None) if user else None
+
+    parts = [f"id={user_id}"]
+    if username:
+        parts.append(f"@{username}")
+    if full_name:
+        parts.append(full_name)
+    return " | ".join(parts)
+
+
 async def notify_admin_reservation(res_id: int, buyer: Message | CallbackQuery | None = None) -> None:
     r = get_reservation(res_id)
     if not r:
         return
 
+    user_obj = None
+    if buyer and getattr(buyer, "from_user", None):
+        user_obj = buyer.from_user
+
     items = reservation_items(res_id)
     lines = [
         f"📌 Новая бронь #{res_id}",
-        f"👤 user_id: {r['user_id']}",
+        f"👤 Покупатель: {user_label(int(r['user_id']), user_obj)}",
         f"📅 {r['day']} {r['slot']}",
         f"⏳ До: {parse_iso(r['expires_at']).astimezone(TZ).strftime('%d.%m.%Y %H:%M')}",
         "",
@@ -637,6 +814,32 @@ async def notify_admin_reservation(res_id: int, buyer: Message | CallbackQuery |
         await safe_send_message(chat_id, text)
 
 
+async def notify_admin_reservation_cancelled(res_id: int, by_user: object | int) -> None:
+    by_user_id = int(by_user.id) if hasattr(by_user, "id") else int(by_user)
+    r = get_reservation(res_id)
+    items = reservation_items(res_id)
+    lines = [
+        f"❌ Бронь отменена #{res_id}",
+        f"👤 Покупатель: {user_label(by_user_id, by_user if hasattr(by_user, 'id') else None)}",
+    ]
+    if r:
+        lines.append(f"📅 {r['day']} {r['slot']}")
+    if items:
+        lines.append("")
+        lines.append("Товары:")
+        for it in items:
+            price = f" — {it['price']}" if it["price"] else ""
+            lines.append(f"• #{it['id']} {it['title']}{price}")
+
+    text = "\n".join(lines)
+    targets = []
+    if ADMIN_CHAT_ID:
+        targets.append(ADMIN_CHAT_ID)
+    targets.extend(ADMIN_IDS)
+    for chat_id in set(targets):
+        await safe_send_message(chat_id, text)
+
+
 async def publish_item(item_id: int) -> None:
     item = get_item(item_id)
     if not item:
@@ -647,33 +850,61 @@ async def publish_item(item_id: int) -> None:
     text = item_text(item)
     photos = get_item_photos(item_id)
 
+    reply_markup = kb_item(item_id, username) if item["status"] == "ACTIVE" else None
     if photos:
-        media = [InputMediaPhoto(media=p) for p in photos[:10]]
-        await bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
-
-    msg = await bot.send_message(
-        chat_id=CHANNEL_USERNAME,
-        text=text,
-        reply_markup=kb_item(item_id, username),
-    )
+        msg = await bot.send_photo(
+            chat_id=CHANNEL_TARGET,
+            photo=photos[0],
+            caption=text,
+            reply_markup=reply_markup,
+        )
+    else:
+        msg = await bot.send_message(
+            chat_id=CHANNEL_TARGET,
+            text=text,
+            reply_markup=reply_markup,
+        )
     set_item_channel_message(item_id, msg.message_id)
 
 
 async def update_channel_post(item_id: int) -> None:
     item = get_item(item_id)
-    if not item or not item["channel_message_id"]:
+    if not item:
+        return
+
+    if not item["channel_message_id"]:
+        if item["status"] != "SOLD":
+            await publish_item(item_id)
+        return
+
+    if item["status"] == "SOLD":
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id=CHANNEL_TARGET, message_id=int(item["channel_message_id"]))
+        clear_item_channel_message(item_id)
         return
 
     me = await bot.get_me()
     username = me.username or ""
+    reply_markup = kb_item(item_id, username) if item["status"] == "ACTIVE" else None
+    has_photo = bool(get_item_photos(item_id))
     try:
-        await bot.edit_message_text(
-            chat_id=CHANNEL_USERNAME,
-            message_id=int(item["channel_message_id"]),
-            text=item_text(item),
-            reply_markup=kb_item(item_id, username),
-        )
-    except TelegramBadRequest:
+        if has_photo:
+            await bot.edit_message_caption(
+                chat_id=CHANNEL_TARGET,
+                message_id=int(item["channel_message_id"]),
+                caption=item_text(item),
+                reply_markup=reply_markup,
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=CHANNEL_TARGET,
+                message_id=int(item["channel_message_id"]),
+                text=item_text(item),
+                reply_markup=reply_markup,
+            )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            return
         # post no longer editable -> publish a fresh one
         await publish_item(item_id)
 
@@ -684,18 +915,76 @@ def parse_csv_rows(content: str) -> list[CsvRow]:
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=";,")
     except Exception:
-        dialect = csv.excel  # fallback
+        # Частый кейс: одна строка заголовка/данных в Telegram-файле.
+        # Тогда Sniffer не может уверенно определить разделитель.
+        dialect = csv.excel_semicolon if ";" in sample.partition("\n")[0] else csv.excel
 
-    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+    # Иногда CSV приходит с BOM в первой ячейке заголовка.
+    normalized_content = content.lstrip("\ufeff")
+    reader = csv.DictReader(io.StringIO(normalized_content), dialect=dialect)
 
-    rows = []
+    alias_map = {
+        "title": {"title", "название", "товар", "наименование", "name"},
+        "price": {"price", "цена", "стоимость", "price_rub"},
+        "description": {"description", "описание", "desc", "details"},
+        "photos": {"photos", "photo", "фото", "фотографии", "photo_id", "photo_ids"},
+    }
+
+    rows: list[CsvRow] = []
+    if not reader.fieldnames:
+        return rows
+
+    # Иногда приходят CSV с разным регистром/пробелами/кавычками в заголовках.
+    header_map: dict[str, str] = {}
+    for raw_name in reader.fieldnames:
+        if not raw_name:
+            continue
+        key = raw_name.strip().strip('"').lower()
+        if key:
+            header_map[key] = raw_name
+
+    def resolve_column(logical_name: str) -> Optional[str]:
+        for alias in alias_map[logical_name]:
+            if alias in header_map:
+                return header_map[alias]
+        return None
+
+    title_col = resolve_column("title")
+    price_col = resolve_column("price")
+    description_col = resolve_column("description")
+    photos_col = resolve_column("photos")
+
+    # fallback: CSV без заголовка. Например: title;price;description;photos
+    headerless_mode = title_col is None
+    if headerless_mode:
+        raw_reader = csv.reader(io.StringIO(normalized_content), dialect=dialect)
+        for raw in raw_reader:
+            cols = [(c or "").strip() for c in raw]
+            if not cols or not cols[0]:
+                continue
+            # Пропускаем строку, если она выглядит как заголовок.
+            first = cols[0].strip().lower().strip('"')
+            if first in alias_map["title"]:
+                continue
+            rows.append(
+                CsvRow(
+                    title=cols[0],
+                    price=cols[1] if len(cols) > 1 else "",
+                    description=cols[2] if len(cols) > 2 else "",
+                    photos=parse_photos_field(cols[3] if len(cols) > 3 else ""),
+                )
+            )
+        return rows
+
     for row in reader:
-        title = (row.get("title") or "").strip()
+        title = (row.get(title_col) or "").strip() if title_col else ""
         if not title:
             continue
-        price = (row.get("price") or "").strip()
-        description = (row.get("description") or "").strip()
-        photos = parse_photos_field((row.get("photos") or row.get("photo") or "").strip())
+        price = (row.get(price_col) or "").strip() if price_col else ""
+        description = (row.get(description_col) or "").strip() if description_col else ""
+        photos = parse_photos_field(
+            ((row.get(photos_col) or "").strip() if photos_col else "")
+        )
         rows.append(CsvRow(title=title, price=price, description=description, photos=photos))
     return rows
 
@@ -711,7 +1000,7 @@ async def cmd_start(m: Message):
             payload = parts[1].strip()
 
     if payload == "checkout":
-        await show_cart(m.from_user.id, m)
+        await show_cart(m.from_user.id)
         return
 
     await m.answer(
@@ -725,7 +1014,15 @@ async def cmd_start(m: Message):
 
 @dp.message(Command("cart"))
 async def cmd_cart(m: Message):
-    await show_cart(m.from_user.id, m)
+    await show_cart(m.from_user.id)
+
+
+@dp.message(Command("version"))
+async def cmd_version(m: Message):
+    if not is_admin(m.from_user.id):
+        await m.answer("⛔ Только для админов")
+        return
+    await m.answer(f"🔖 Revision: {RUNTIME_REVISION}")
 
 
 @dp.message(Command("my"))
@@ -753,6 +1050,11 @@ async def cmd_cancel(m: Message):
     if not ok:
         await m.answer("Не нашёл активную бронь с таким id.")
         return
+
+    for it in reservation_items(res_id):
+        with suppress(Exception):
+            await update_channel_post(int(it["id"]))
+    await notify_admin_reservation_cancelled(res_id, m.from_user)
     await m.answer("✅ Бронь отменена.")
 
 
@@ -767,50 +1069,77 @@ async def cmd_photoid(m: Message):
     await m.answer("Пришли фото как фото (не документом) — верну photo_id.")
 
 
-@dp.message(Command("add"))
-async def cmd_add(m: Message):
-    if not is_admin(m.from_user.id):
-        await m.answer("⛔ Только для админов")
-        return
-    await m.answer(
-        "Формат:\n"
-        "/add Название | Цена | Описание | photo_id1|photo_id2\n\n"
-        "Если фото нет, можно без последнего блока."
-    )
-
-
-@dp.message(Command("add"))
-async def cmd_add(m: Message):
+async def _handle_add_command(m: Message):
     if not is_admin(m.from_user.id):
         await m.answer("⛔ Только для админов")
         return
 
-    payload = (m.text or "").split(maxsplit=1)
+    command_text = (m.text or m.caption or "").strip()
+    raw = ""
+    if command_text:
+        # Поддерживаем /add и /add@botname в тексте/подписи.
+        raw = re.sub(r"^/add(?:@\w+)?", "", command_text, count=1, flags=re.IGNORECASE).strip()
 
-    # /add без текста → показать инструкцию
-    if len(payload) == 1:
+    # /add без данных → показать инструкцию
+    if not raw:
         await m.answer(
             "Формат:\n"
-            "/add Название | Цена | Описание | photo_id1|photo_id2\n\n"
+            "/add Название | Цена | Описание\n"
+            "(можно в подписи к фото)\n\n"
+            "Фото можно приложить как вложение к сообщению — photo_id вручную не нужен.\n"
+            "Можно и так: ответить командой /add ... на сообщение с фото.\n"
+            "Либо добавь photo_id 4-м полем: /add Название | Цена | Описание | photo_id\n"
             "Описание и фото можно пропускать."
         )
         return
 
-    raw = payload[1].strip()
-    parts = [x.strip() for x in raw.split("|")]
+    # Делим только на 4 части: title | price | description | photos
+    # Так описание не ломается, а блок photos можно передавать как через |, так и через ,.
+    parts = [x.strip() for x in raw.split("|", 3)]
 
     title = parts[0] if len(parts) > 0 else ""
     price = parts[1] if len(parts) > 1 else ""
     description = parts[2] if len(parts) > 2 else ""
-    photos = [p.strip() for p in parts[3:] if p.strip()]  # всё после 3-го поля — фото
+    photos = parse_photos_field(parts[3]) if len(parts) > 3 else []
 
-    if not title:
-        await m.answer("Нет названия. Пример: /add Платье | 2500 | описание | <photo_id>")
+    # Частый реальный ввод: /add Название | Цена | <photo_id>
+    # (без отдельного поля описания). В таком случае интерпретируем 3-е поле как photos.
+    if len(parts) == 3 and not photos and looks_like_photo_id_list(description):
+        description = ""
+        photos = parse_photos_field(parts[2])
+
+    context_photo_id, photo_source = extract_photo_from_message_context(m)
+    if context_photo_id:
+        photos = [context_photo_id]
+
+    caption_add = bool((m.caption or "").strip() and re.match(r"(?i)^/add(?:@\w+)?(?:\s|$)", (m.caption or "").strip()))
+    if caption_add and not photos:
+        await m.answer("❌ Фото не найдено. Отправь именно фото (не документ) и подписью напиши /add ...")
         return
 
-    item_id = add_item(title=title, price=price, description=description, photos=photos)
-    await publish_item(item_id)
+    if not title:
+        await m.answer("Нет названия. Пример: /add Платье | 2500 | описание")
+        return
+
+    try:
+        logger.info("/add parsed: title=%r price=%r photos=%d source=%s", title, price, len(photos), photo_source if 'photo_source' in locals() else 'n/a')
+        item_id = add_item(title=title, price=price, description=description, photos=photos)
+        await publish_item(item_id)
+    except Exception as e:
+        await m.answer(f"❌ Не удалось добавить товар: {e}")
+        return
+
     await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
+
+
+@dp.message(Command("add"))
+async def cmd_add(m: Message):
+    await _handle_add_command(m)
+
+
+@dp.message(F.photo, F.caption.regexp(r"(?i)^\s*/add(?:@\w+)?(?:\s|$)"))
+async def cmd_add_caption(m: Message):
+    await _handle_add_command(m)
 
 
 @dp.message(Command("addphoto"))
@@ -931,13 +1260,18 @@ async def cmd_csv(m: Message, state: FSMContext):
 async def on_csv(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
         return
-    if not (m.document.file_name or "").lower().endswith(".csv"):
-        await m.answer("Это не CSV файл")
-        return
+    name = (m.document.file_name or "").lower()
+    mime = (m.document.mime_type or "").lower()
+    if not (name.endswith(".csv") or mime in {"text/csv", "application/vnd.ms-excel", "application/csv", "text/plain"}):
+        await m.answer("⚠️ Файл не похож на CSV по имени/MIME, пробую прочитать всё равно…")
 
     file = await bot.get_file(m.document.file_id)
     payload = await bot.download_file(file.file_path)
-    content = payload.read().decode("utf-8-sig")
+    raw_bytes = payload.read()
+    try:
+        content = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        content = raw_bytes.decode("cp1251", errors="replace")
 
     rows = parse_csv_rows(content)
     if not rows:
@@ -947,20 +1281,37 @@ async def on_csv(m: Message, state: FSMContext):
 
     ok = 0
     failed = 0
+    skipped = 0
+    failed_rows: list[str] = []
     for row in rows:
         try:
+            existing_id = find_item_by_fields(row.title, row.price, row.description)
+            if existing_id:
+                skipped += 1
+                continue
             item_id = add_item(row.title, row.price, row.description, row.photos)
             await publish_item(item_id)
             ok += 1
         except TelegramRetryAfter as e:
             await asyncio.sleep(int(e.retry_after) + 1)
             failed += 1
-        except Exception:
+            failed_rows.append(f"{row.title[:40]} — retry_after:{int(e.retry_after)}")
+        except Exception as e:
             failed += 1
+            failed_rows.append(f"{row.title[:40]} — {type(e).__name__}: {e}")
+            logger.exception("CSV import failed for row title=%r", row.title)
         await asyncio.sleep(0.2)
 
     await state.clear()
-    await m.answer(f"✅ Импорт завершён. Успешно: {ok}. Ошибок: {failed}.")
+    summary = (
+        f"✅ Импорт завершён. Добавлено: {ok}. "
+        f"Пропущено (уже есть): {skipped}. Ошибок: {failed}."
+    )
+    if failed_rows:
+        preview = "\n".join(f"• {x}" for x in failed_rows[:10])
+        await m.answer(summary + "\n\nОшибки:\n" + preview)
+    else:
+        await m.answer(summary)
 
 
 @dp.message(Command("block"))
@@ -969,7 +1320,7 @@ async def cmd_block(m: Message):
         return
     parts = (m.text or "").split()
     if len(parts) < 3:
-        await m.answer("Использование: /block YYYY-MM-DD HH:MM [HH:MM] [причина]")
+        await m.answer("Использование: /block YYYY-MM-DD HH:MM[,HH:MM,...] [HH:MM] [причина]")
         return
 
     day_str = parts[1]
@@ -982,9 +1333,18 @@ async def cmd_block(m: Message):
     reason = " ".join(parts[reason_start:]).strip() or "Недоступно"
 
     try:
-        slots = parse_slot_range(start_slot, end_slot)
+        slots = parse_slot_selection(start_slot, end_slot)
         added = block_slots(day_str, slots, reason, m.from_user.id)
-        await m.answer(f"✅ Заблокировано слотов: {added}")
+        await m.answer(f"✅ Заблокировано слотов: {added} ({', '.join(slots)})")
+    except ValueError as e:
+        msg = str(e)
+        if msg == "list_and_range_conflict":
+            await m.answer("Ошибка: укажи либо список через запятую, либо диапазон, но не оба варианта сразу.")
+            return
+        if msg.startswith("invalid_slot:"):
+            await m.answer(f"Ошибка: некорректный слот {msg.split(':', 1)[1]}")
+            return
+        await m.answer(f"Ошибка: {e}")
     except Exception as e:
         await m.answer(f"Ошибка: {e}")
 
@@ -995,16 +1355,25 @@ async def cmd_unblock(m: Message):
         return
     parts = (m.text or "").split()
     if len(parts) < 3:
-        await m.answer("Использование: /unblock YYYY-MM-DD HH:MM [HH:MM]")
+        await m.answer("Использование: /unblock YYYY-MM-DD HH:MM[,HH:MM,...] [HH:MM]")
         return
 
     day_str = parts[1]
     start_slot = parts[2]
     end_slot = parts[3] if len(parts) >= 4 and re.match(r"^\d{2}:\d{2}$", parts[3]) else None
     try:
-        slots = parse_slot_range(start_slot, end_slot)
+        slots = parse_slot_selection(start_slot, end_slot)
         removed = unblock_slots(day_str, slots)
-        await m.answer(f"✅ Разблокировано слотов: {removed}")
+        await m.answer(f"✅ Разблокировано слотов: {removed} ({', '.join(slots)})")
+    except ValueError as e:
+        msg = str(e)
+        if msg == "list_and_range_conflict":
+            await m.answer("Ошибка: укажи либо список через запятую, либо диапазон, но не оба варианта сразу.")
+            return
+        if msg.startswith("invalid_slot:"):
+            await m.answer(f"Ошибка: некорректный слот {msg.split(':', 1)[1]}")
+            return
+        await m.answer(f"Ошибка: {e}")
     except Exception as e:
         await m.answer(f"Ошибка: {e}")
 
@@ -1030,9 +1399,58 @@ async def cmd_slots(m: Message):
     await m.answer("\n".join(lines))
 
 
+@dp.message(Command("admin"))
+async def cmd_admin_help(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await m.answer(
+        "Управление слотами бронирования:\n"
+        "• /slots YYYY-MM-DD — посмотреть занятость/блокировки\n"
+        "• /block YYYY-MM-DD HH:MM[,HH:MM] [HH:MM] [причина] — закрыть один/несколько/диапазон\n"
+        "• /unblock YYYY-MM-DD HH:MM[,HH:MM] [HH:MM] — открыть один/несколько/диапазон\n"
+        "• /blockday YYYY-MM-DD [причина] — закрыть весь день\n"
+        "• /unblockday YYYY-MM-DD — открыть весь день"
+    )
+
+
+@dp.message(Command("blockday"))
+async def cmd_blockday(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    parts = (m.text or "").split()
+    if len(parts) < 2:
+        await m.answer("Использование: /blockday YYYY-MM-DD [причина]")
+        return
+    day_str = parts[1]
+    reason = " ".join(parts[2:]).strip() or "Недоступно весь день"
+    try:
+        added = block_slots(day_str, generate_slots(), reason, m.from_user.id)
+        await m.answer(f"✅ День {day_str} закрыт. Заблокировано слотов: {added}")
+    except Exception as e:
+        await m.answer(f"Ошибка: {e}")
+
+
+@dp.message(Command("unblockday"))
+async def cmd_unblockday(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    parts = (m.text or "").split()
+    if len(parts) < 2:
+        await m.answer("Использование: /unblockday YYYY-MM-DD")
+        return
+    day_str = parts[1]
+    try:
+        removed = unblock_slots(day_str, generate_slots())
+        await m.answer(f"✅ День {day_str} открыт. Разблокировано слотов: {removed}")
+    except Exception as e:
+        await m.answer(f"Ошибка: {e}")
+
+
 @dp.message(F.photo)
 async def photo_id_echo(m: Message):
     if not is_admin(m.from_user.id):
+        return
+    if (m.caption or "").strip().lower().startswith("/add"):
         return
     await m.answer(f"photo_id:\n{m.photo[-1].file_id}")
 
@@ -1040,17 +1458,30 @@ async def photo_id_echo(m: Message):
 # =========================
 # Cart & checkout callbacks
 # =========================
-async def show_cart(user_id: int, target: Message):
+async def answer_user(user_id: int, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> bool:
+    try:
+        await bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
+        return True
+    except TelegramForbiddenError:
+        logger.warning("Cannot DM user %s: user has not started bot", user_id)
+        return False
+    except Exception:
+        logger.exception("Failed to DM user %s", user_id)
+        return False
+
+
+async def show_cart(user_id: int):
     items = cart_list(user_id)
     if not items:
-        await target.answer("Корзина пуста. Добавляй товары в канале кнопкой 🛒")
+        await answer_user(user_id, "Корзина пуста. Добавляй товары в канале кнопкой 🛒")
         return
 
     lines = ["🛒 Твоя корзина:"]
     for item in items:
         price = f" — {item['price']}" if item["price"] else ""
         lines.append(f"• #{item['id']} {item['title']}{price}")
-    await target.answer("\n".join(lines), reply_markup=kb_cart(items))
+    text = "\n".join(lines)
+    await answer_user(user_id, text, reply_markup=kb_cart(items))
 
 
 @dp.callback_query(F.data == "noop")
@@ -1061,25 +1492,40 @@ async def cb_noop(c: CallbackQuery):
 @dp.callback_query(F.data == "cart_show")
 async def cb_cart_show(c: CallbackQuery):
     await c.answer()
-    await show_cart(c.from_user.id, c.message)
+    await show_cart(c.from_user.id)
 
 
 @dp.callback_query(F.data.startswith("cart_add:"))
 async def cb_cart_add(c: CallbackQuery):
-    await c.answer()
     item_id = int(c.data.split(":", 1)[1])
     item = get_item(item_id)
-    if not item or item["status"] != "ACTIVE" or int(item["is_active"]) != 1:
-        await c.message.answer("Этот товар недоступен.")
+    if not item_is_available(item):
+        ok = await answer_user(c.from_user.id, "Этот товар недоступен.")
+        if not ok:
+            await c.answer("Товар недоступен", show_alert=True)
+        else:
+            await c.answer()
         return
     if item_is_reserved(item_id):
-        await c.message.answer("Этот товар уже забронирован.")
+        ok = await answer_user(c.from_user.id, "Этот товар уже забронирован.")
+        if not ok:
+            await c.answer("Товар уже забронирован", show_alert=True)
+        else:
+            await c.answer()
         return
 
     if cart_add(c.from_user.id, item_id):
-        await c.message.answer("✅ Добавлено в корзину. Открой /cart")
+        ok = await answer_user(c.from_user.id, "✅ Добавлено в корзину. Открой /cart")
+        if not ok:
+            await c.answer("Открой бота в ЛС: /start", show_alert=True)
+        else:
+            await c.answer()
     else:
-        await c.message.answer("Не удалось добавить.")
+        ok = await answer_user(c.from_user.id, "Не удалось добавить.")
+        if not ok:
+            await c.answer("Не удалось добавить", show_alert=True)
+        else:
+            await c.answer()
 
 
 @dp.callback_query(F.data.startswith("cart_remove:"))
@@ -1087,14 +1533,14 @@ async def cb_cart_remove(c: CallbackQuery):
     await c.answer()
     item_id = int(c.data.split(":", 1)[1])
     cart_remove(c.from_user.id, item_id)
-    await show_cart(c.from_user.id, c.message)
+    await show_cart(c.from_user.id)
 
 
 @dp.callback_query(F.data == "cart_clear")
 async def cb_cart_clear(c: CallbackQuery):
     await c.answer()
     cart_clear(c.from_user.id)
-    await c.message.answer("🧹 Корзина очищена")
+    await answer_user(c.from_user.id, "🧹 Корзина очищена")
 
 
 @dp.callback_query(F.data == "checkout_start")
@@ -1102,16 +1548,20 @@ async def cb_checkout_start(c: CallbackQuery):
     await c.answer()
     items = cart_list(c.from_user.id)
     if not items:
-        await c.message.answer("Корзина пуста")
+        await answer_user(c.from_user.id, "Корзина пуста")
         return
-    await c.message.answer("Выбери день:", reply_markup=kb_days())
+    await answer_user(
+        c.from_user.id,
+        "Самовывоз из Belgrade Waterfront\n\nВыбери день:",
+        reply_markup=kb_days(),
+    )
 
 
 @dp.callback_query(F.data.startswith("pick_day:"))
 async def cb_pick_day(c: CallbackQuery):
     await c.answer()
     day_str = c.data.split(":", 1)[1]
-    await c.message.answer(f"Выбери слот на {day_str}", reply_markup=kb_slots(day_str))
+    await answer_user(c.from_user.id, f"Выбери слот на {day_str}", reply_markup=kb_slots(day_str))
 
 
 @dp.callback_query(F.data.startswith("pick_slot:"))
@@ -1119,10 +1569,11 @@ async def cb_pick_slot(c: CallbackQuery):
     await c.answer()
     _, day_str, slot = c.data.split(":", 2)
     if reservation_slot_taken(day_str, slot):
-        await c.message.answer("Этот слот уже занят, выбери другой.")
-        await c.message.answer(f"Слоты на {day_str}:", reply_markup=kb_slots(day_str))
+        await answer_user(c.from_user.id, "Этот слот уже занят, выбери другой.")
+        await answer_user(c.from_user.id, f"Слоты на {day_str}:", reply_markup=kb_slots(day_str))
         return
-    await c.message.answer(
+    await answer_user(
+        c.from_user.id,
         f"Подтверди бронь:\n📅 {day_str}\n🕒 {slot}",
         reply_markup=kb_confirm(day_str, slot),
     )
@@ -1135,34 +1586,61 @@ async def cb_confirm(c: CallbackQuery):
 
     items = cart_list(c.from_user.id)
     if not items:
-        await c.message.answer("Корзина пуста.")
+        await answer_user(c.from_user.id, "Корзина пуста.")
         return
 
     bad = [it for it in items if item_is_reserved(int(it["id"]))]
     if bad:
-        await c.message.answer("Часть товаров уже занята. Удали их из корзины и попробуй снова.")
-        await show_cart(c.from_user.id, c.message)
+        await answer_user(c.from_user.id, "Часть товаров уже занята. Удали их из корзины и попробуй снова.")
+        await show_cart(c.from_user.id)
         return
 
     try:
         res_id = create_reservation(c.from_user.id, day_str, slot, [int(it["id"]) for it in items])
     except ValueError:
-        await c.message.answer("Слот уже занят/заблокирован, выбери другой.")
-        await c.message.answer(f"Слоты на {day_str}:", reply_markup=kb_slots(day_str))
+        await answer_user(c.from_user.id, "Слот уже занят/заблокирован, выбери другой.")
+        await answer_user(c.from_user.id, f"Слоты на {day_str}:", reply_markup=kb_slots(day_str))
         return
 
     cart_clear(c.from_user.id)
     r = get_reservation(res_id)
     exp_str = parse_iso(r["expires_at"]).astimezone(TZ).strftime("%d.%m.%Y %H:%M")
 
-    await c.message.answer(
+    await answer_user(
+        c.from_user.id,
         "✅ Бронь подтверждена\n\n"
         f"📅 {day_str}\n"
         f"🕒 {slot}\n"
         f"⏳ Бронь до: {exp_str}\n\n"
-        f"{PICKUP_TEXT}"
+        f"{PICKUP_TEXT}",
+        reply_markup=kb_after_reservation(res_id),
     )
-    await notify_admin_reservation(res_id)
+    for it in items:
+        with suppress(Exception):
+            await update_channel_post(int(it["id"]))
+
+    await notify_admin_reservation(res_id, c)
+
+
+@dp.callback_query(F.data.startswith("cancel_res:"))
+async def cb_cancel_res(c: CallbackQuery):
+    await c.answer()
+    parts = c.data.split(":", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_user(c.from_user.id, "Не удалось отменить бронь: неверный id.")
+        return
+
+    res_id = int(parts[1])
+    ok = cancel_reservation(c.from_user.id, res_id)
+    if not ok:
+        await answer_user(c.from_user.id, "Эту бронь уже нельзя отменить.")
+        return
+
+    for it in reservation_items(res_id):
+        with suppress(Exception):
+            await update_channel_post(int(it["id"]))
+    await notify_admin_reservation_cancelled(res_id, c.from_user)
+    await answer_user(c.from_user.id, f"✅ Бронь #{res_id} отменена. Товары снова в наличии.")
 
 
 # =========================
@@ -1172,17 +1650,31 @@ async def background_cleanup() -> None:
     while True:
         with suppress(Exception):
             cleanup_expired()
-        await asyncio.sleep(60)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            break
 
 
 async def main() -> None:
     init_db()
+    logger.info("Starting bot revision=%s", RUNTIME_REVISION)
+    with suppress(Exception):
+        await bot.delete_webhook(drop_pending_updates=False)
+
     cleaner = asyncio.create_task(background_cleanup())
     try:
         await dp.start_polling(bot)
+    except TelegramConflictError as e:
+        logger.error(
+            "Telegram polling conflict: another bot instance is running with the same BOT_TOKEN. "
+            "Stop duplicate instances and redeploy. Details: %s",
+            e,
+        )
+        raise RuntimeError("telegram_polling_conflict") from e
     finally:
         cleaner.cancel()
-        with suppress(Exception):
+        with suppress(asyncio.CancelledError):
             await cleaner
 
 
