@@ -580,6 +580,21 @@ async def addphoto_receive(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ Фото добавлено к товару #{item_id}")
 
+@dp.message(Command("addphoto"))
+async def cmd_addphoto(m: Message):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+
+    parts = (m.text or "").split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await m.answer("Используй: /addphoto <item_id>")
+        return
+
+    item_id = int(parts[1])
+    WAIT_PHOTO_ID.add((m.from_user.id, item_id))
+
+    await m.answer("Пришли фото — добавлю к товару.")
+
 @dp.message(F.document)
 async def on_csv_document(m: Message):
     if not m.document.file_name.lower().endswith(".csv"):
@@ -629,13 +644,27 @@ async def on_photo_get_id(m: Message):
     if m.from_user.id not in ADMIN_IDS:
         return
 
-    if m.from_user.id not in WAIT_PHOTO_ID:
+    # проверяем — ждём ли мы фото для addphoto
+    target = None
+    for pair in list(WAIT_PHOTO_ID):
+        if pair[0] == m.from_user.id:
+            target = pair
+            break
+
+    if target:
+        WAIT_PHOTO_ID.discard(target)
+        _, item_id = target
+
+        photo_id = m.photo[-1].file_id
+        add_item_photo(item_id=item_id, photo_id=photo_id, pos=99)
+
+        await m.answer(f"✅ Фото добавлено к товару #{item_id}")
         return
 
-    WAIT_PHOTO_ID.discard(m.from_user.id)
-
-    photo_id = m.photo[-1].file_id  # самое качественное фото
-    await m.answer(f"photo_id:\n{photo_id}\n\nСкопируй и вставь в колонку photo в CSV.")
+    # иначе — обычный режим: просто показать photo_id
+    if m.from_user.id in WAIT_PHOTO_ID:
+        photo_id = m.photo[-1].file_id
+        await m.answer(f"photo_id:\n{photo_id}")
 
 @dp.message(Command("add"))
 async def cmd_add(m: Message, state: FSMContext):
