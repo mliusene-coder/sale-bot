@@ -611,36 +611,36 @@ async def on_csv_document(m: Message):
     fail = 0
 
     for title, price, photo_id in items:
-    try:
-        # создаём товар
-        item_id = add_item_to_db(
-            title=title,
-            price=price,
-            photo_id=photo_id
-        )
+        try:
+            # создаём товар
+            item_id = add_item_to_db(
+                title=title,
+                price=price,
+                photo_id=photo_id
+            )
 
-        # если есть фото — кладём в таблицу фото
-        if photo_id:
-            add_item_photo(item_id=item_id, photo_id=photo_id, pos=0)
+            # если есть фото — кладём в таблицу фото
+            if photo_id:
+                add_item_photo(item_id=item_id, photo_id=photo_id, pos=0)
 
-        # публикуем
-        await publish_item_to_channel(
-            item_id=item_id,
-            title=title,
-            price=price,
-            photo_id=photo_id
-        )
+            # публикуем
+            await publish_item_to_channel(
+                item_id=item_id,
+                title=title,
+                price=price,
+                photo_id=photo_id
+            )
 
-        ok += 1
-        await asyncio.sleep(1.2)
+            ok += 1
+            await asyncio.sleep(1.2)
 
-    except Exception as e:
-        import traceback
-        print("CSV IMPORT FAIL:", title, price, photo_id, flush=True)
-        traceback.print_exc()
-        fail += 1
+        except Exception as e:
+            import traceback
+            print("CSV IMPORT FAIL:", title, price, photo_id, flush=True)
+            traceback.print_exc()
+            fail += 1
 
-        await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
+    await m.answer(f"Готово. Добавлено: {ok}. Ошибок: {fail}.")
 
 @dp.message(Command("cart"))
 async def cmd_cart(m: Message):
