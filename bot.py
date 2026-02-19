@@ -744,18 +744,31 @@ def parse_csv_rows(content: str) -> list[CsvRow]:
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=";,")
     except Exception:
-        dialect = csv.excel  # fallback
+        # Частый кейс: одна строка заголовка/данных в Telegram-файле.
+        # Тогда Sniffer не может уверенно определить разделитель.
+        dialect = csv.excel_semicolon if ";" in sample.partition("\n")[0] else csv.excel
 
     reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+    if not reader.fieldnames:
+        return []
+
+    # Иногда приходят CSV с разным регистром/пробелами в заголовках.
+    header_map = {name.strip().lower(): name for name in reader.fieldnames if name}
 
     rows = []
     for row in reader:
-        title = (row.get("title") or "").strip()
+        title = (row.get(header_map.get("title", "title")) or "").strip()
         if not title:
             continue
-        price = (row.get("price") or "").strip()
-        description = (row.get("description") or "").strip()
-        photos = parse_photos_field((row.get("photos") or row.get("photo") or "").strip())
+        price = (row.get(header_map.get("price", "price")) or "").strip()
+        description = (row.get(header_map.get("description", "description")) or "").strip()
+        photos = parse_photos_field(
+            (
+                row.get(header_map.get("photos", "photos"))
+                or row.get(header_map.get("photo", "photo"))
+                or ""
+            ).strip()
+        )
         rows.append(CsvRow(title=title, price=price, description=description, photos=photos))
     return rows
 
@@ -832,18 +845,6 @@ async def cmd_add(m: Message):
     if not is_admin(m.from_user.id):
         await m.answer("⛔ Только для админов")
         return
-    await m.answer(
-        "Формат:\n"
-        "/add Название | Цена | Описание | photo_id1|photo_id2\n\n"
-        "Если фото нет, можно без последнего блока."
-    )
-
-
-@dp.message(Command("add"))
-async def cmd_add(m: Message):
-    if not is_admin(m.from_user.id):
-        await m.answer("⛔ Только для админов")
-        return
 
     payload = (m.text or "").split(maxsplit=1)
 
@@ -862,14 +863,20 @@ async def cmd_add(m: Message):
     title = parts[0] if len(parts) > 0 else ""
     price = parts[1] if len(parts) > 1 else ""
     description = parts[2] if len(parts) > 2 else ""
-    photos = [p.strip() for p in parts[3:] if p.strip()]  # всё после 3-го поля — фото
+    photos_raw = "|".join(parts[3:]) if len(parts) > 3 else ""
+    photos = parse_photos_field(photos_raw)
 
     if not title:
         await m.answer("Нет названия. Пример: /add Платье | 2500 | описание | <photo_id>")
         return
 
-    item_id = add_item(title=title, price=price, description=description, photos=photos)
-    await publish_item(item_id)
+    try:
+        item_id = add_item(title=title, price=price, description=description, photos=photos)
+        await publish_item(item_id)
+    except Exception as e:
+        await m.answer(f"❌ Не удалось добавить товар: {e}")
+        return
+
     await m.answer(f"✅ Опубликовано в канал. ID товара: #{item_id}")
 
 
@@ -991,9 +998,8 @@ async def cmd_csv(m: Message, state: FSMContext):
 async def on_csv(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
         return
-    if not (m.document.file_name or "").lower().endswith(".csv"):
-        await m.answer("Это не CSV файл")
-        return
+    name = (m.document.file_name or "").lower()
+    mime = (m.document.mime_type or "").lower()
 
     file = await bot.get_file(m.document.file_id)
     payload = await bot.download_file(file.file_path)
@@ -1001,7 +1007,10 @@ async def on_csv(m: Message, state: FSMContext):
 
     rows = parse_csv_rows(content)
     if not rows:
-        await m.answer("В CSV нет валидных строк")
+        if not (name.endswith(".csv") or mime in {"text/csv", "application/vnd.ms-excel"}):
+            await m.answer("Файл не похож на CSV или в нём нет валидных строк")
+        else:
+            await m.answer("В CSV нет валидных строк")
         await state.clear()
         return
 
@@ -1333,7 +1342,7 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         cleaner.cancel()
-        with suppress(Exception):
+        with suppress(asyncio.CancelledError):
             await cleaner
 
 
